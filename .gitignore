@@ -1,0 +1,65 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local
+*.secret
+*.pem
+*.key
+*.p12
+*.jks
+
+# Logs
+*.log
+logs/
+
+# Java / Maven
+target/
+**/target/
+.mvn/wrapper/maven-wrapper.jar
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.py[cod]
+
+# Node / frontend
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/build/
+.vite/
+coverage/
+
+# Test and temporary output
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+
+# Keep project documentation and templates trackable.
+!README.md
+!docs/
+!postman/

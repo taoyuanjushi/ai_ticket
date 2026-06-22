@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+httpx
+pytest
+langchain==0.3.30
+langchain-core>=0.3.85,<1.0.0

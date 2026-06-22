@@ -1,0 +1,787 @@
+{
+  "info": {
+    "_postman_id": "f5a538f6-df56-4cb1-9d4f-hello-demo",
+    "name": "智能工单管理系统后端",
+    "description": "Spring Boot + MySQL + Redis + JWT 工单管理系统后端接口集合。AI Reserved 分组为后续预留接口，当前后端暂未实现。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "USER_TOKEN",
+      "value": ""
+    },
+    {
+      "key": "STAFF_TOKEN",
+      "value": ""
+    },
+    {
+      "key": "ADMIN_TOKEN",
+      "value": ""
+    },
+    {
+      "key": "ticketId",
+      "value": "1"
+    },
+    {
+      "key": "userId",
+      "value": "1"
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"user01\",\n  \"password\": \"User@123456\",\n  \"name\": \"User One\",\n  \"age\": 20,\n  \"email\": \"user01@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "注册普通用户。注册后如需 STAFF 或 ADMIN，请在数据库中手动修改 user.role。"
+          }
+        },
+        {
+          "name": "Login User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.data && json.data.token) {",
+                  "  pm.collectionVariables.set('USER_TOKEN', json.data.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"user01\",\n  \"password\": \"User@123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "登录并获取 JWT Token。默认脚本会把 token 保存到 USER_TOKEN；测试 STAFF / ADMIN 时可手动复制到 STAFF_TOKEN / ADMIN_TOKEN。"
+          }
+        },
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            },
+            "description": "查询当前登录用户，需要 USER_TOKEN。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "User",
+      "item": [
+        {
+          "name": "Get User List",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ADMIN_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "查询用户列表，仅 ADMIN 可访问。"
+          }
+        },
+        {
+          "name": "Get User Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}"
+              ]
+            },
+            "description": "查询用户详情。USER 只能查自己，ADMIN 可查任意用户。响应不包含 password。"
+          }
+        },
+        {
+          "name": "Get User Tickets",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}/tickets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}",
+                "tickets"
+              ]
+            },
+            "description": "查询某个用户创建的工单。USER 只能查自己，STAFF / ADMIN 可查任意用户。"
+          }
+        },
+        {
+          "name": "Get User Replies",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}/ticket-replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}",
+                "ticket-replies"
+              ]
+            },
+            "description": "查询某个用户发表的回复。"
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ADMIN_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}"
+              ]
+            },
+            "description": "删除用户，仅 ADMIN 可访问。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Ticket",
+      "item": [
+        {
+          "name": "Create Ticket",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"登录失败\",\n  \"content\": \"账号无法登录\",\n  \"priority\": \"HIGH\",\n  \"category\": \"ACCOUNT\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tickets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets"
+              ]
+            },
+            "description": "创建工单。不需要传 userId，后端从 JWT 中获取当前用户。"
+          }
+        },
+        {
+          "name": "Get Ticket List",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets?page=1&size=10&status=OPEN&priority=HIGH&category=ACCOUNT&keyword=登录",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                },
+                {
+                  "key": "status",
+                  "value": "OPEN"
+                },
+                {
+                  "key": "priority",
+                  "value": "HIGH"
+                },
+                {
+                  "key": "category",
+                  "value": "ACCOUNT"
+                },
+                {
+                  "key": "keyword",
+                  "value": "登录"
+                }
+              ]
+            },
+            "description": "分页条件查询工单。USER 只能看到自己的工单，STAFF / ADMIN 可看全部。"
+          }
+        },
+        {
+          "name": "Get Ticket Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/{{ticketId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "{{ticketId}}"
+              ]
+            },
+            "description": "查询单个工单。USER 只能查看自己的工单。"
+          }
+        },
+        {
+          "name": "Get Ticket Full Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/{{ticketId}}/detail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "{{ticketId}}",
+                "detail"
+              ]
+            },
+            "description": "查询工单完整详情，包括工单、提交人、回复列表。该接口使用 Redis 缓存。"
+          }
+        },
+        {
+          "name": "Update Ticket",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{STAFF_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"登录失败\",\n  \"content\": \"账号仍然无法登录\",\n  \"priority\": \"HIGH\",\n  \"status\": \"PROCESSING\",\n  \"category\": \"ACCOUNT\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tickets/{{ticketId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "{{ticketId}}"
+              ]
+            },
+            "description": "修改工单基本信息。仅 STAFF / ADMIN。"
+          }
+        },
+        {
+          "name": "Update Ticket Status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{STAFF_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"PROCESSING\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tickets/{{ticketId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "{{ticketId}}",
+                "status"
+              ]
+            },
+            "description": "修改工单状态。仅 STAFF / ADMIN。"
+          }
+        },
+        {
+          "name": "Delete Ticket",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ADMIN_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/{{ticketId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "{{ticketId}}"
+              ]
+            },
+            "description": "删除工单。仅 ADMIN。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "TicketReply",
+      "item": [
+        {
+          "name": "Create Reply",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"请尝试重置密码。\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tickets/{{ticketId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "{{ticketId}}",
+                "replies"
+              ]
+            },
+            "description": "新增工单回复。不需要传 userId 和 replyType。"
+          }
+        },
+        {
+          "name": "Get Replies By Ticket",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tickets/{{ticketId}}/replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tickets",
+                "{{ticketId}}",
+                "replies"
+              ]
+            },
+            "description": "查询某个工单下的回复。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "OperationLog",
+      "item": [
+        {
+          "name": "Get Operation Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ADMIN_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/operation-logs?page=1&size=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "operation-logs"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "分页查询操作日志，仅 ADMIN。"
+          }
+        },
+        {
+          "name": "Get Operation Logs By UserId",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ADMIN_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/operation-logs?page=1&size=10&userId={{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "operation-logs"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                },
+                {
+                  "key": "userId",
+                  "value": "{{userId}}"
+                }
+              ]
+            },
+            "description": "按 userId 查询操作日志，仅 ADMIN。"
+          }
+        },
+        {
+          "name": "Get Operation Logs By BusinessType",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ADMIN_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/operation-logs?page=1&size=10&businessType=TICKET",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "operation-logs"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                },
+                {
+                  "key": "businessType",
+                  "value": "TICKET"
+                }
+              ]
+            },
+            "description": "按 businessType 查询操作日志，仅 ADMIN。"
+          }
+        },
+        {
+          "name": "Get Operation Logs By OperationType",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ADMIN_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/operation-logs?page=1&size=10&operationType=CREATE_TICKET",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "operation-logs"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                },
+                {
+                  "key": "operationType",
+                  "value": "CREATE_TICKET"
+                }
+              ]
+            },
+            "description": "按 operationType 查询操作日志，仅 ADMIN。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "AI Reserved",
+      "item": [
+        {
+          "name": "AI Reply Suggestion Reserved",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{STAFF_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ai/tickets/{{ticketId}}/reply-suggestion",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ai",
+                "tickets",
+                "{{ticketId}}",
+                "reply-suggestion"
+              ]
+            },
+            "description": "预留接口，当前后端暂未实现。后续可用于生成 AI 回复建议。"
+          }
+        },
+        {
+          "name": "AI Ticket Summary Reserved",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{STAFF_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ai/tickets/{{ticketId}}/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ai",
+                "tickets",
+                "{{ticketId}}",
+                "summary"
+              ]
+            },
+            "description": "预留接口，当前后端暂未实现。后续可用于生成工单总结。"
+          }
+        },
+        {
+          "name": "AI Ticket Classify Reserved",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{STAFF_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ai/tickets/{{ticketId}}/classify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ai",
+                "tickets",
+                "{{ticketId}}",
+                "classify"
+              ]
+            },
+            "description": "预留接口，当前后端暂未实现。后续可用于 AI 工单分类。"
+          }
+        },
+        {
+          "name": "AI Knowledge Ask Reserved",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"如何重置密码？\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/ai/knowledge/ask",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ai",
+                "knowledge",
+                "ask"
+              ]
+            },
+            "description": "预留接口，当前后端暂未实现。后续可用于 AI 知识库问答。"
+          }
+        }
+      ]
+    }
+  ]
+}

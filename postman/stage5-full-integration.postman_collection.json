@@ -1,0 +1,646 @@
+{
+  "info": {
+    "_postman_id": "stage5-full-integration",
+    "name": "Stage5 Java + Python AI 联调验证",
+    "description": "第五阶段联调集合：覆盖 Java 原生接口、Python /agent/chat、Human-in-the-loop、pending_action 会话隔离、AI 回复建议和失败路径。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "00 Health",
+      "item": [
+        {
+          "name": "Java - Hello",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{javaBaseUrl}}/hello"
+          }
+        },
+        {
+          "name": "Python - Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{pythonBaseUrl}}/health"
+          }
+        },
+        {
+          "name": "Python - Tools",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{pythonBaseUrl}}/agent/tools"
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 Auth",
+      "item": [
+        {
+          "name": "Register tom USER",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"tom\",\n  \"password\": \"123456\",\n  \"name\": \"Tom\",\n  \"age\": 20,\n  \"email\": \"tom@example.com\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/auth/register"
+          }
+        },
+        {
+          "name": "Register alice USER",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"alice\",\n  \"password\": \"123456\",\n  \"name\": \"Alice\",\n  \"age\": 21,\n  \"email\": \"alice@example.com\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/auth/register"
+          }
+        },
+        {
+          "name": "Register staff USER first",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"staff\",\n  \"password\": \"123456\",\n  \"name\": \"Staff\",\n  \"age\": 30,\n  \"email\": \"staff@example.com\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/auth/register"
+          }
+        },
+        {
+          "name": "Register admin USER first",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"123456\",\n  \"name\": \"Admin\",\n  \"age\": 35,\n  \"email\": \"admin@example.com\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/auth/register"
+          }
+        },
+        {
+          "name": "Login tom -> USER_TOKEN",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.token) {",
+                  "  pm.environment.set('USER_TOKEN', json.data.token);",
+                  "  pm.environment.set('USER_ID', json.data.userId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"tom\",\n  \"password\": \"123456\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/auth/login"
+          }
+        },
+        {
+          "name": "Login alice -> ALICE_TOKEN",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.token) {",
+                  "  pm.environment.set('ALICE_TOKEN', json.data.token);",
+                  "  pm.environment.set('ALICE_ID', json.data.userId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"alice\",\n  \"password\": \"123456\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/auth/login"
+          }
+        },
+        {
+          "name": "Login staff -> STAFF_TOKEN",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.token) {",
+                  "  pm.environment.set('STAFF_TOKEN', json.data.token);",
+                  "  pm.environment.set('STAFF_ID', json.data.userId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"staff\",\n  \"password\": \"123456\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/auth/login"
+          }
+        },
+        {
+          "name": "Login admin -> ADMIN_TOKEN",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.token) {",
+                  "  pm.environment.set('ADMIN_TOKEN', json.data.token);",
+                  "  pm.environment.set('ADMIN_ID', json.data.userId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"123456\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/auth/login"
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Java Tickets",
+      "item": [
+        {
+          "name": "Java - tom creates ticket -> TOM_TICKET_ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.id) {",
+                  "  pm.environment.set('TOM_TICKET_ID', json.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"登录失败\",\n  \"content\": \"账号无法登录，重置密码后仍然失败\",\n  \"priority\": \"HIGH\",\n  \"category\": \"ACCOUNT\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/tickets"
+          }
+        },
+        {
+          "name": "Java - tom query own tickets",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              }
+            ],
+            "url": "{{javaBaseUrl}}/tickets?page=1&size=10"
+          }
+        },
+        {
+          "name": "Java - staff query all tickets",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{STAFF_TOKEN}}"
+              }
+            ],
+            "url": "{{javaBaseUrl}}/tickets?page=1&size=10"
+          }
+        },
+        {
+          "name": "Java - staff update status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{STAFF_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"PROCESSING\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/tickets/{{TOM_TICKET_ID}}/status"
+          }
+        },
+        {
+          "name": "Java - ticket full detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{STAFF_TOKEN}}"
+              }
+            ],
+            "url": "{{javaBaseUrl}}/tickets/{{TOM_TICKET_ID}}/detail"
+          }
+        },
+        {
+          "name": "Java - user cannot update status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"CLOSED\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/tickets/{{TOM_TICKET_ID}}/status"
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Python Agent",
+      "item": [
+        {
+          "name": "Python - query tickets with USER_TOKEN",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"tom\",\n  \"conversation_id\": \"chat-user-query-001\",\n  \"message\": \"查一下所有处理中工单\",\n  \"auth_token\": \"{{USER_TOKEN}}\"\n}"
+            },
+            "url": "{{pythonBaseUrl}}/agent/chat"
+          }
+        },
+        {
+          "name": "Python - create ticket pending_action",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"tom\",\n  \"conversation_id\": \"chat-create-001\",\n  \"message\": \"帮我创建一个工单，标题是支付失败，描述是用户支付成功但订单仍显示未支付，优先级高\",\n  \"auth_token\": \"{{USER_TOKEN}}\"\n}"
+            },
+            "url": "{{pythonBaseUrl}}/agent/chat"
+          }
+        },
+        {
+          "name": "Python - confirm create ticket",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.answer) {",
+                  "  const match = json.answer.match(/ID\\s*(\\d+)/);",
+                  "  if (match) pm.environment.set('AI_CREATED_TICKET_ID', match[1]);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"tom\",\n  \"conversation_id\": \"chat-create-001\",\n  \"message\": \"确认\",\n  \"auth_token\": \"{{USER_TOKEN}}\"\n}"
+            },
+            "url": "{{pythonBaseUrl}}/agent/chat"
+          }
+        },
+        {
+          "name": "Python - confirm again should not duplicate",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"tom\",\n  \"conversation_id\": \"chat-create-001\",\n  \"message\": \"确认\",\n  \"auth_token\": \"{{USER_TOKEN}}\"\n}"
+            },
+            "url": "{{pythonBaseUrl}}/agent/chat"
+          }
+        },
+        {
+          "name": "Python - update status pending_action",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"staff\",\n  \"conversation_id\": \"chat-update-001\",\n  \"message\": \"把 {{TOM_TICKET_ID}} 号工单改成处理中\",\n  \"auth_token\": \"{{STAFF_TOKEN}}\"\n}"
+            },
+            "url": "{{pythonBaseUrl}}/agent/chat"
+          }
+        },
+        {
+          "name": "Python - confirm update status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"staff\",\n  \"conversation_id\": \"chat-update-001\",\n  \"message\": \"确认\",\n  \"auth_token\": \"{{STAFF_TOKEN}}\"\n}"
+            },
+            "url": "{{pythonBaseUrl}}/agent/chat"
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Python AI Reply Suggestion",
+      "item": [
+        {
+          "name": "Python - reply suggestion for ticket",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"auth_token\": \"{{STAFF_TOKEN}}\"\n}"
+            },
+            "url": "{{pythonBaseUrl}}/ai/tickets/{{TOM_TICKET_ID}}/reply-suggestion"
+          }
+        },
+        {
+          "name": "Java - staff saves confirmed AI reply",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{STAFF_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"您好，AI 建议先重置密码并重新登录。如果仍然失败，请补充错误截图和发生时间。\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/tickets/{{TOM_TICKET_ID}}/ai-replies"
+          }
+        },
+        {
+          "name": "Java - user cannot save AI reply",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"普通用户不应该能保存 AI 回复建议。\"\n}"
+            },
+            "url": "{{javaBaseUrl}}/tickets/{{TOM_TICKET_ID}}/ai-replies"
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Permission And Failure Paths",
+      "item": [
+        {
+          "name": "Python - invalid token query",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"tom\",\n  \"conversation_id\": \"chat-error-token\",\n  \"message\": \"查一下所有工单\",\n  \"auth_token\": \"invalid-token\"\n}"
+            },
+            "url": "{{pythonBaseUrl}}/agent/chat"
+          }
+        },
+        {
+          "name": "Python - missing ticket update then confirm",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"staff\",\n  \"conversation_id\": \"chat-missing-ticket\",\n  \"message\": \"把 {{MISSING_TICKET_ID}} 号工单改成处理中\",\n  \"auth_token\": \"{{STAFF_TOKEN}}\"\n}"
+            },
+            "url": "{{pythonBaseUrl}}/agent/chat"
+          }
+        },
+        {
+          "name": "Python - confirm missing ticket update",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"staff\",\n  \"conversation_id\": \"chat-missing-ticket\",\n  \"message\": \"确认\",\n  \"auth_token\": \"{{STAFF_TOKEN}}\"\n}"
+            },
+            "url": "{{pythonBaseUrl}}/agent/chat"
+          }
+        },
+        {
+          "name": "Python - alice reply suggestion for tom ticket should be forbidden",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"auth_token\": \"{{ALICE_TOKEN}}\"\n}"
+            },
+            "url": "{{pythonBaseUrl}}/ai/tickets/{{TOM_TICKET_ID}}/reply-suggestion"
+          }
+        },
+        {
+          "name": "Java - admin query operation logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ADMIN_TOKEN}}"
+              }
+            ],
+            "url": "{{javaBaseUrl}}/operation-logs?page=1&size=10"
+          }
+        },
+        {
+          "name": "Java - user query operation logs should be forbidden",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{USER_TOKEN}}"
+              }
+            ],
+            "url": "{{javaBaseUrl}}/operation-logs?page=1&size=10"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+USE springboot_demo;
+
+ALTER TABLE user
+ADD COLUMN username VARCHAR(50) NULL COMMENT '登录用户名';
+
+ALTER TABLE user
+ADD COLUMN password VARCHAR(100) NULL COMMENT '加密后的密码';
+
+ALTER TABLE user
+ADD COLUMN role VARCHAR(30) NOT NULL DEFAULT 'USER' COMMENT '角色：USER-普通用户，STAFF-客服，ADMIN-管理员';
+
+ALTER TABLE user
+ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间';
+
+ALTER TABLE user
+ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间';
+
+UPDATE user
+SET username = CONCAT('user', id)
+WHERE username IS NULL OR username = '';
+
+UPDATE user
+SET password = '$2a$10$7EqJtq98hPqEX7fNZaFWoOHiwvQvBhv81Zr7.cqTwHjqOTgiqKx1e'
+WHERE password IS NULL OR password = '';
+
+ALTER TABLE user
+MODIFY COLUMN username VARCHAR(50) NOT NULL COMMENT '登录用户名';
+
+ALTER TABLE user
+MODIFY COLUMN password VARCHAR(100) NOT NULL COMMENT '加密后的密码';
+
+ALTER TABLE user
+ADD UNIQUE KEY uk_user_username (username);

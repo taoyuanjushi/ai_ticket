@@ -1,0 +1,32 @@
+from typing import Any
+
+
+INVALID_PARAMS = "INVALID_PARAMS"
+LLM_CONFIG_MISSING = "LLM_CONFIG_MISSING"
+LLM_CALL_FAILED = "LLM_CALL_FAILED"
+JAVA_API_ERROR = "JAVA_API_ERROR"
+TOOL_CALL_FAILED = "TOOL_CALL_FAILED"
+INVALID_TOOL_ARGUMENTS = "INVALID_TOOL_ARGUMENTS"
+MISSING_REQUIRED_FIELDS = "MISSING_REQUIRED_FIELDS"
+TICKET_NOT_FOUND = "TICKET_NOT_FOUND"
+INVALID_STATUS = "INVALID_STATUS"
+INVALID_STATUS_TRANSITION = "INVALID_STATUS_TRANSITION"
+PENDING_ACTION_NOT_FOUND = "PENDING_ACTION_NOT_FOUND"
+PENDING_ACTION_EXECUTION_FAILED = "PENDING_ACTION_EXECUTION_FAILED"
+INVALID_CONFIRMATION_ACTION = "INVALID_CONFIRMATION_ACTION"
+INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+class AppException(Exception):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        status_code: int = 400,
+        detail: Any | None = None,
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(message)
