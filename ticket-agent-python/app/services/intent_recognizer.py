@@ -28,8 +28,10 @@ CANCEL_TRIGGERS = {
     "不用",
     "算了",
     "不要",
+    "不要了",
     "不要执行",
     "先不改了",
+    "先不做了",
     "拒绝",
     "cancel",
     "no",
@@ -179,6 +181,8 @@ CREATE_PRIORITY_PATTERN = re.compile(
 TICKET_ID_PATTERNS = (
     re.compile(r"id\s*(?:为|是|:|：)?\s*(?P<ticket_id>\d+)\s*的?工单", re.I),
     re.compile(r"(?P<ticket_id>\d+)\s*号工单"),
+    re.compile(r"(?P<ticket_id>\d+)\s*号(?!工单)"),
+    re.compile(r"^\s*(?P<ticket_id>\d+)\s*$"),
     re.compile(r"工单\s*(?:id)?\s*(?:为|是|:|：)?\s*(?P<ticket_id>\d+)", re.I),
 )
 UPDATE_STATUS_PATTERNS = (
@@ -256,6 +260,16 @@ class IntentRecognizer:
             return self._recognize_query_ticket(normalized_message)
 
         return self._result(IntentType.UNKNOWN, normalized_message)
+
+    def recognize_create_ticket_fields(self, message: str) -> IntentResult:
+        """Extract create-ticket fields from a follow-up message."""
+
+        return self._recognize_create_ticket(message.strip())
+
+    def recognize_update_ticket_status_fields(self, message: str) -> IntentResult:
+        """Extract update-status fields from a follow-up message."""
+
+        return self._recognize_update_ticket_status(message.strip())
 
     def _is_confirm(self, lowered_message: str) -> bool:
         return lowered_message in {trigger.lower() for trigger in CONFIRM_TRIGGERS}
@@ -517,6 +531,8 @@ class IntentRecognizer:
             return "CLOSED"
         if "处理中" in normalized_message:
             return "PROCESSING"
+        if "待处理" in normalized_message or "打开" in normalized_message:
+            return "OPEN"
 
         return None
 

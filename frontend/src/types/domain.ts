@@ -7,10 +7,18 @@ export type OperationType =
   | "CREATE_TICKET"
   | "REPLY_TICKET"
   | "UPDATE_TICKET_STATUS"
+  | "TICKET_CATEGORY_UPDATED"
+  | "TICKET_ASSIGNEE_UPDATED"
   | "DELETE_TICKET"
   | "LOGIN_SUCCESS"
   | "LOGIN_FAILED"
-  | "REGISTER_USER";
+  | "REGISTER_USER"
+  | "AI_TICKET_QUERY"
+  | "AI_REPLY_SUGGESTED"
+  | "AI_PENDING_ACTION_CREATED"
+  | "AI_WRITE_CONFIRMED"
+  | "AI_WRITE_CANCELLED"
+  | "AI_REPLY_CREATED";
 
 export interface Result<T> {
   code: number;
@@ -53,7 +61,9 @@ export interface Ticket {
   content: string;
   status: TicketStatus;
   priority: TicketPriority;
-  category: string;
+  category?: string | null;
+  assignedTo?: number | null;
+  assignedUserName?: string | null;
   userId: number;
   createdAt?: string;
   updatedAt?: string;
@@ -101,23 +111,19 @@ export interface TicketUpdateInput {
 
 export interface OperationLog {
   id: number;
-  userId: number;
-  operationType: OperationType;
-  businessType: BusinessType;
-  businessId: number;
-  content: string;
+  ticketId?: number | null;
+  operatorId?: number | null;
+  operatorName?: string | null;
+  action: OperationType | string;
+  detail: string;
   createdAt?: string;
 }
 
 export interface AiChatResponse {
   answer?: unknown;
-  [key: string]: unknown;
-}
-
-export interface ReplySuggestionResponse {
-  ticket_id?: number;
-  suggestion?: string;
-  confidence?: number;
-  reason?: string;
+  type?: string;
+  message?: string;
+  data?: unknown;
   risk_flags?: string[];
+  [key: string]: unknown;
 }

@@ -298,7 +298,8 @@ Authorization: Bearer <token>
 - 创建工单不需要传 `userId`，后端从 JWT 中获取当前用户。
 - `USER` 只能查看自己的工单。
 - `STAFF` / `ADMIN` 可以查看所有工单。
-- 只有 `STAFF` / `ADMIN` 可以修改工单和修改状态。
+- 只有 `STAFF` / `ADMIN` 可以修改工单、修改状态和修改分类。
+- `STAFF` 可以把工单分配给自己；`ADMIN` 可以分配给任意 `STAFF` / `ADMIN`，也可以取消分配。
 - 只有 `ADMIN` 可以删除工单。
 
 ### GET /tickets
@@ -309,7 +310,7 @@ Authorization: Bearer <token>
 请求示例：
 
 ```http
-GET /tickets?page=1&size=10&status=OPEN&priority=HIGH&category=ACCOUNT&keyword=login
+GET /tickets?page=1&size=10&status=OPEN&priority=HIGH&category=账号登录&assignedTo=me&keyword=login
 ```
 
 查询参数：
@@ -321,6 +322,7 @@ GET /tickets?page=1&size=10&status=OPEN&priority=HIGH&category=ACCOUNT&keyword=l
 | status | 工单状态：OPEN / PROCESSING / CLOSED |
 | priority | 优先级：LOW / MEDIUM / HIGH / URGENT |
 | category | 工单分类 |
+| assignedTo | 处理人 ID；也支持 `me` 表示当前登录用户 |
 | keyword | 模糊查询 title / content |
 
 成功响应：
@@ -408,6 +410,73 @@ PROCESSING -> CLOSED
 CLOSED 不允许继续修改状态
 ```
 
+### PATCH /tickets/{id}/category
+
+功能：修改工单分类。  
+是否需要 Token：是。  
+权限：`STAFF` / `ADMIN`。
+
+请求体：
+
+```json
+{
+  "category": "账号登录"
+}
+```
+
+说明：
+
+- `category` 可以为空，表示清空分类。
+- `category` 长度不能超过 64。
+- 修改成功后会清理工单详情缓存，并记录 `TICKET_CATEGORY_UPDATED` 操作日志。
+
+### POST /tickets/{id}/category/pending
+
+功能：创建采纳 AI 分类建议的待确认动作。  
+是否需要 Token：是。  
+权限：`STAFF` / `ADMIN`。
+
+请求体：
+
+```json
+{
+  "conversationId": "chat-001",
+  "category": "账号登录",
+  "confidence": 0.82,
+  "reason": "标题和描述均提到登录失败"
+}
+```
+
+说明：
+
+- 该接口只创建 `APPLY_AI_CATEGORY` pending_action，不直接修改 `ticket.category`。
+- `category` 不能为空，长度不能超过 64。
+- `confidence` 可选，范围是 0 到 1。
+- Confirm 时会重新校验当前用户权限，成功后更新 `Ticket.category`。
+- 创建 pending 记录 `AI_CATEGORY_APPLY_PENDING_CREATED`；确认成功记录 `AI_CATEGORY_APPLIED`。
+
+### PATCH /tickets/{id}/assignee
+
+功能：分配或取消工单处理人。  
+是否需要 Token：是。
+
+请求体：
+
+```json
+{
+  "assignedTo": 2
+}
+```
+
+权限：
+
+- `USER` 不能分配处理人。
+- `STAFF` 只能分配给自己。
+- `ADMIN` 可以分配给任意 `STAFF` / `ADMIN`，也可以传 `null` 取消分配。
+- `assignedTo` 对应用户必须存在，且角色必须是 `STAFF` 或 `ADMIN`。
+
+修改成功后会清理工单详情缓存，并记录 `TICKET_ASSIGNEE_UPDATED` 操作日志。
+
 ### DELETE /tickets/{id}
 
 功能：删除工单。  
@@ -447,6 +516,63 @@ CLOSED 不允许继续修改状态
 - `USER` 只能回复自己的工单。
 - `STAFF` / `ADMIN` 可以回复任意工单。
 - `CLOSED` 工单不允许继续回复。
+
+### POST /tickets/{id}/ai-replies/pending
+
+功能：创建保存 AI 回复建议的待确认动作。  
+是否需要 Token：是。  
+权限：`STAFF` / `ADMIN`。
+
+请求体：
+
+```json
+{
+  "conversationId": "chat-001",
+  "content": "建议先确认报错时间、截图和复现步骤。"
+}
+```
+
+成功响应中的 `data`：
+
+```json
+{
+  "type": "PENDING_CONFIRMATION",
+  "message": "请确认是否保存这条 AI 回复。",
+  "data": {
+    "id": 1,
+    "actionType": "SAVE_AI_REPLY",
+    "ticketId": 3,
+    "payload": {
+      "ticketId": 3,
+      "content": "建议先确认报错时间、截图和复现步骤。",
+      "source": "AI_REPLY_SUGGESTION"
+    }
+  },
+  "risk_flags": []
+}
+```
+
+说明：
+
+- 该接口只创建 `SAVE_AI_REPLY` pending_action，不直接写入 `ticket_reply`。
+- `content` 不能为空，长度不能超过 2000。
+- Confirm 时会重新校验当前用户权限，成功后保存为 `TicketReplyType.AI`。
+- 创建 pending 记录 `AI_REPLY_SAVE_PENDING_CREATED`；确认成功记录 `AI_REPLY_SAVED`。
+
+### POST /tickets/{id}/ai-replies
+
+功能：旧的 AI 回复直写入口。  
+当前策略：不再允许公开调用直写，会返回 `400`：
+
+```json
+{
+  "code": 400,
+  "message": "保存 AI 回复需要先创建 pending_action 并确认。",
+  "data": null
+}
+```
+
+原因：保存 AI 回复属于写操作，必须经过 pending_action 和用户 Confirm。
 
 ## 6. OperationLog 接口
 
@@ -557,19 +683,28 @@ POST http://127.0.0.1:8001/agent/chat
 }
 ```
 
-### AI Reserved 接口
+### AI 结果保存策略
 
-以下接口仅作为后续规划，不属于当前可用 API：
+AI 结果分为建议类和采纳类：
+
+| AI 能力 | 当前保存策略 |
+|---|---|
+| 回复建议 | 默认只展示；保存时创建 `SAVE_AI_REPLY` pending_action，Confirm 后保存为 `TicketReplyType.AI` |
+| 分类建议 | 默认只展示；采纳时创建 `APPLY_AI_CATEGORY` pending_action，Confirm 后更新 `Ticket.category` |
+| 优先级建议 | 当前只展示，不直接修改 `priority` |
+| 工单摘要 | 当前只展示，不保存 |
+| SLA 风险 | 当前只展示，不保存 |
+
+确认执行统一走：
 
 ```http
-POST /ai/tickets/{id}/reply-suggestion
-POST /ai/tickets/{id}/summary
-POST /ai/tickets/{id}/classify
-POST /ai/knowledge/ask
+POST /ai/pending-actions/confirm
 ```
 
-后续可以由 Java 后端调用 Python FastAPI AI 服务实现，再把 AI 回复建议保存为 `TicketReply`，并设置：
+取消执行统一走：
 
-```text
-replyType = AI
+```http
+POST /ai/pending-actions/cancel
 ```
+
+Confirm 时 Java 会重新从当前登录上下文获取用户身份，校验 `userId + conversationId`，并再次校验当前权限。`pending_action.payload_json` 只保存业务参数，不保存 token。

@@ -35,6 +35,10 @@ class TicketDTO(BaseModel):
     status: TicketStatus
     priority: TicketPriority | None = None
     category: str | None = None
+    assignedTo: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("assignedTo", "assigned_to"),
+    )
     createdBy: int | None = Field(
         default=None,
         validation_alias=AliasChoices("createdBy", "userId", "user_id"),

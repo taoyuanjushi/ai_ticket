@@ -82,7 +82,7 @@ public class TicketReplyService {
         TicketReply reply = new TicketReply();
         reply.setTicketId(ticketId);
         reply.setUserId(currentUserId);
-        reply.setContent(dto.getContent().trim());
+        reply.setContent(normalizeAiReplyContent(dto));
         reply.setReplyType(TicketReplyType.AI.name());
 
         ticketReplyMapper.insert(reply);
@@ -97,6 +97,12 @@ public class TicketReplyService {
                 BusinessType.TICKET_REPLY.name(),
                 reply.getId(),
                 "保存 AI 回复建议"
+        );
+        operationLogService.record(
+                OperationType.AI_REPLY_SAVED.name(),
+                BusinessType.TICKET_REPLY.name(),
+                reply.getId(),
+                "用户确认保存 AI 回复，工单ID=" + ticketId
         );
         ticketCacheService.evictTicketRelated(ticketId);
 
@@ -125,6 +131,17 @@ public class TicketReplyService {
         }
 
         return ticket;
+    }
+
+    private String normalizeAiReplyContent(AiReplyCreateDTO dto) {
+        if (dto == null || dto.getContent() == null || dto.getContent().isBlank()) {
+            throw new BusinessException(400, "content不能为空");
+        }
+        String content = dto.getContent().trim();
+        if (content.length() > 2000) {
+            throw new BusinessException(400, "content长度不能超过2000");
+        }
+        return content;
     }
 
     private void checkReplyReadable(Ticket ticket) {

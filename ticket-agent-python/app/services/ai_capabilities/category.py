@@ -34,18 +34,30 @@ class CategorySuggestionService(TicketAiCapabilityBase):
     ) -> CategorySuggestionResult:
         risk_flags = self.base_risk_flags(ticket_detail)
         if ticket_detail.category and ticket_detail.category != "OTHER":
-            return CategorySuggestionResult(
+            result = CategorySuggestionResult(
                 suggested_category=ticket_detail.category,
                 confidence=0.9 if not risk_flags else 0.6,
                 reason="Java 工单详情中已经存在 category 字段，本阶段只返回建议，不修改工单表。",
                 risk_flags=risk_flags,
             )
+            result.risk_flags = self.grounding_service.add_unsupported_conclusion_flag(
+                output_text=result.reason,
+                ticket_detail=ticket_detail,
+                risk_flags=result.risk_flags,
+            )
+            return result
 
-        return self._suggest_from_text(
+        result = self._suggest_from_text(
             title=ticket_detail.title,
             description=ticket_detail.description or "",
             risk_flags=risk_flags,
         )
+        result.risk_flags = self.grounding_service.add_unsupported_conclusion_flag(
+            output_text=result.reason,
+            ticket_detail=ticket_detail,
+            risk_flags=result.risk_flags,
+        )
+        return result
 
     def suggest_from_text(
         self,

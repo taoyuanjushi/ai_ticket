@@ -2,7 +2,7 @@
 
 `ticket-agent-python` 是一个用于学习 AI Agent 应用开发的 Python 项目。当前阶段在已有 FastAPI Agent 服务基础上，引入 LangChain Tool 的最小实践：实现工具定义、工具注册、工具列表接口，以及 `/agent/chat` 中的简单规则路由。
 
-第二阶段已把工单工具的数据源从 Python 本地 mock 数据切换为 Java Spring Boot REST API。Python 不直接连接 MySQL，不维护真实工单数据；写操作继续使用简化版内存 Human-in-the-loop 人工确认机制。
+当前工单工具的数据源已切换为 Java Spring Boot REST API。Python 不直接连接 MySQL，不维护真实工单数据；写操作先在 Java 后端创建 `pending_action`，用户确认后才由 Java 执行业务写入。Python 侧只保留开发用 `pending_intent`，用于多轮追问时暂存“还没补齐的参数”。
 
 ## 当前阶段目标
 
@@ -20,6 +20,7 @@
 - 学习写操作的 Human-in-the-loop 人工确认机制。
 - 学习按用户或会话隔离 Human-in-the-loop 确认态。
 - 基于 Java 工单详情调用 LLM 生成 AI 回复建议。
+- 使用 `pending_intent` 支持创建工单、修改状态、回复建议等场景的多轮字段补齐。
 - 编写基础接口测试。
 
 ## 项目结构
@@ -165,6 +166,164 @@ Java API 配置说明：
 - `JAVA_API_TIMEOUT`：Python 调 Java API 的超时时间，默认 10 秒。
 - `/agent/chat` 请求体里的 `auth_token` 优先级高于 `.env` 中的 `JAVA_API_TOKEN`。
 
+## 多轮追问：pending_intent 与 pending_action
+
+当前 Agent 有两类状态，含义不同：
+
+| 状态 | 保存位置 | 作用 | 是否写数据库 |
+| --- | --- | --- | --- |
+| `pending_intent` | Python 开发用内存 Store | 暂存缺字段的意图和已收集参数 | 不会 |
+| `pending_action` | Java 后端 | 暂存参数完整、等待用户确认的写操作 | 确认后会 |
+
+`pending_intent` 只保存这些业务字段：
+
+```json
+{
+  "user_id": "7",
+  "conversation_id": "chat-001",
+  "intent": "CREATE_TICKET",
+  "collected": {
+    "priority": "HIGH"
+  },
+  "missing_fields": ["title", "description"],
+  "created_at": "2026-06-23T10:00:00Z",
+  "updated_at": "2026-06-23T10:00:00Z"
+}
+```
+
+它不会保存 `auth_token`、`Authorization`、JWT 或密码。隔离 key 为：
+
+```text
+ai:pending_intent:{user_id}:{conversation_id}
+```
+
+默认 10 分钟过期。它按 `user_id + conversation_id` 隔离，避免用户 A 的补充信息误补到用户 B 的会话，也避免同一用户多个聊天窗口互相覆盖。
+
+创建工单多轮追问示例：
+
+```text
+用户：帮我创建一个高优先级工单
+AI：请补充工单标题和描述。
+用户：标题是数据库连接失败，描述是测试环境偶发无法连接
+AI：请确认是否创建该工单。
+用户：确认
+AI：已创建工单：ID 6，标题：数据库连接失败，优先级 HIGH，状态 OPEN。
+```
+
+修改状态多轮追问示例：
+
+```text
+用户：把工单改成处理中
+AI：修改工单状态还缺少必要信息：工单 ID。请说明要修改几号工单。
+用户：3 号
+AI：请确认是否修改该工单状态。
+用户：确认
+AI：已将 3 号工单状态修改为 PROCESSING。
+```
+
+取消规则：
+
+```text
+用户：取消
+AI：已取消当前待补充或待确认的操作。
+```
+
+取消会清理当前 `pending_intent`，并调用 Java 当前会话的 `pending_action` 取消逻辑；不会执行创建、修改状态或保存回复建议。
+
+字段补齐后仍然需要人工确认，因为创建工单、修改状态、保存 AI 回复建议都属于写操作。Python 只能编排意图和参数，真正写入必须由 Java 在当前有效 `auth_token` 下完成权限校验后执行。
+
+运行 Python 回归测试：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+## AI 结构化输出
+
+`/agent/chat` 面向前端统一返回 `AgentResponse` 外层结构。普通文字回答使用 `NORMAL`，AI 分析成功使用 `JSON_RESULT`，缺字段使用 `MISSING_FIELDS`，写操作确认使用 `PENDING_CONFIRMATION`，登录失效使用 `UNAUTHORIZED`，无权限或不可访问使用 `FORBIDDEN`，异常使用 `ERROR`。
+
+统一外层格式：
+
+```json
+{
+  "type": "JSON_RESULT",
+  "message": "分析完成",
+  "data": {},
+  "risk_flags": []
+}
+```
+
+当前结构化能力的 `data` 固定为：
+
+| 能力 | message | data 字段 |
+| --- | --- | --- |
+| 回复建议 | 回复建议生成完成 | `suggestion`、`confidence`、`reason`、`risk_flags` |
+| 工单摘要 | 工单摘要生成完成 | `summary`、`key_points`、`risk_flags` |
+| 优先级建议 | 优先级建议生成完成 | `suggested_priority`、`confidence`、`reason`、`risk_flags` |
+| 分类建议 | 分类建议生成完成 | `suggested_category`、`confidence`、`reason`、`risk_flags` |
+| 相似工单 | 相似工单检索完成 | `similar_tickets`、`risk_flags` |
+| SLA 风险 | SLA 风险分析完成 | `sla_risk_level`、`reason`、`missing_fields`、`risk_flags` |
+
+示例：
+
+```json
+{
+  "type": "JSON_RESULT",
+  "message": "优先级建议生成完成",
+  "data": {
+    "suggested_priority": "HIGH",
+    "confidence": 0.76,
+    "reason": "工单描述中包含登录失败和阻塞等高影响关键词。",
+    "risk_flags": []
+  },
+  "risk_flags": []
+}
+```
+
+为什么不返回 Markdown：前端需要稳定解析字段并渲染卡片，Markdown 或混合自然语言容易导致页面只能按普通文本展示，也不方便测试。
+
+为什么要用 Pydantic：`app/schemas/ai_outputs.py` 会校验 `confidence` 必须在 `0.0` 到 `1.0` 之间，优先级只能是 `LOW`、`MEDIUM`、`HIGH`，SLA 风险只能是 `LOW`、`MEDIUM`、`HIGH`、`UNKNOWN`，列表字段必须真的是 list。
+
+LLM 非法 JSON 处理：`app/services/llm_json_parser.py` 会先解析纯 JSON；如果模型返回 Markdown 代码块或前后带解释文字，会尝试提取 JSON 对象再解析一次；仍失败时返回可读 `ERROR`，`risk_flags` 包含 `JSON解析失败`，不会把 Python 堆栈返回前端。
+
+权限和 grounding 规则：所有基于工单详情的能力必须先通过 Java API 获取真实工单数据。Java 返回 401、403、404、500、连接失败或超时时，Python 不调用 LLM，不生成假结果，直接返回 `UNAUTHORIZED`、`FORBIDDEN` 或 `ERROR`。SLA 缺少 `deadline`、`responseDueAt`、`resolveDueAt` 等字段时，只能返回 `UNKNOWN`、`missing_fields` 和 `SLA字段不足`，不能编造“还有 2 小时超时”。
+
+## Grounding 防幻觉规则
+
+Grounding 的意思是：AI 结果必须“落地”到 Java 后端返回的真实工单详情上。当前必须 grounding 的能力包括：回复建议、工单摘要、优先级建议、分类建议、相似工单检索、SLA 风险提醒。
+
+标准流程：
+
+```text
+用户：总结 3 号工单
+-> Python 识别 TICKET_SUMMARY
+-> Python 调 Java GET /tickets/3/detail
+-> Java 做登录和权限校验
+-> 200：Python 只基于 ticket_detail 生成结构化 JSON
+-> 401/403/404/500/连接失败/超时：Python 直接返回错误，不调用 LLM
+```
+
+为什么 403 / 404 后不能调用 LLM：如果 Java 已经拒绝访问，Python 就没有可信上下文。继续让模型生成，会把“无权限或不存在”的工单伪造成有内容的工单，既有安全风险，也会误导用户。
+
+`app/services/grounding.py` 负责统一处理：
+
+- 判断哪些意图必须先读 Java 工单详情；
+- 构造允许传给 LLM 的 `ticket_context`，只包含 `id`、`title`、`description`、`status`、`priority`、`category`、`assignedTo`、时间字段和历史回复内容；
+- 移除 `token`、`authorization`、`password` 等敏感字段；
+- 检测高风险表述，例如“已经修复”“日志显示”“监控显示”“根因是”“SLA 已超时”“还有 2 小时超时”；
+- 如果工单详情中没有依据，在 `risk_flags` 中加入 `可能包含未依据结论`，必要时降级为“信息不足”。
+
+SLA 规则：如果 Java 详情缺少 `deadline`、`responseDueAt`、`resolveDueAt`、`createdAt`、`updatedAt`、`status` 等字段，就返回 `sla_risk_level=UNKNOWN`，并列出 `missing_fields`。没有截止时间时，不能说“已超时”或“还有多久超时”。
+
+相似工单规则：先读取目标工单详情，再通过 Java `/tickets` 查询候选工单。候选只来自 Java 返回的当前用户可访问范围，Python 不直连数据库，也不从本地未授权缓存拿数据。
+
+运行 Python 回归测试：
+
+```powershell
+cd ticket-agent-python
+.\.venv\Scripts\python.exe -m pytest
+```
+
 ## 第二阶段：工具从 mock 数据切换到 Java API
 
 当前工具数据源：
@@ -212,7 +371,11 @@ Content-Type: application/json
 
 ## 第三阶段：确认态隔离
 
-为了避免多个用户或多个会话共用同一个 `pending_action`，`/agent/chat` 请求体新增 `user_id` 和 `conversation_id`。写操作产生的 `pending_action` 会按 `session_key` 保存在内存字典中，确认或取消时也只处理当前 `session_key` 对应的动作。
+为了避免多个用户或多个会话共用同一个状态，`/agent/chat` 请求体使用 `user_id` 和 `conversation_id` 做隔离。当前实现中：
+
+- `pending_intent`：Python 开发用内存 Store，保存缺字段的临时意图。
+- `pending_action`：Java 后端托管，保存参数完整、等待确认的写操作。
+- 确认和取消都使用当前请求携带的 `auth_token`，不会使用旧 token。
 
 请求体格式：
 
@@ -232,38 +395,33 @@ Content-Type: application/json
 - `conversation_id`：当前会话 ID，可选；如果传入，会优先用于隔离确认态。
 - `auth_token`：调用 Java API 时使用的 JWT Token，可选。
 
-`session_key` 生成规则：
+`pending_intent` key 生成规则：
 
 ```text
-优先使用 conversation_id -> conversation:{conversation_id}
-没有 conversation_id 时使用 user_id -> user:{user_id}
-两个都没有时使用 default
+ai:pending_intent:{user_id}:{conversation_id}
 ```
 
-`default` 只适合本地学习和测试。正式接入前端或 Java 后端时，必须传 `user_id` 或 `conversation_id`，否则多个请求仍可能落到同一个默认会话。
+如果没有传入 `user_id`，Python 会使用 `anonymous` 作为本地开发兜底；正式链路应由 Java 转发真实用户身份和会话 ID。
 
-当前 `PendingAction` 结构：
+Java `pending_action` 的业务 payload 示例：
 
 ```json
 {
-  "tool_name": "update_ticket_status",
-  "args": {
-    "ticket_id": 3,
+  "actionType": "UPDATE_TICKET_STATUS",
+  "payload": {
+    "ticketId": 3,
     "status": "PROCESSING"
-  },
-  "summary": "将 3 号工单状态修改为 PROCESSING",
-  "action_type": "write",
-  "created_at": 1710000000.0
+  }
 }
 ```
 
-`PendingActionStore` 当前使用 Python 内存字典保存状态：
+Java 托管 `pending_action` 的隔离维度：
 
 ```text
-session_key -> PendingAction
+userId + conversationId
 ```
 
-默认过期时间为 5 分钟。确认或取消后，会删除当前 `session_key` 下的 `pending_action`，不会影响其他用户或其他会话。
+Python 不保存 `pending_action` token，不直接写数据库，也不绕过 Java 权限。确认成功后由 Java 修改数据库；重复确认不能重复执行。
 
 Postman 测试流程：
 
@@ -732,17 +890,19 @@ pytest
 ```text
 用户 message
 -> AgentToolService.chat_with_tools(message, user_id, conversation_id)
--> 根据 conversation_id 或 user_id 生成 session_key
--> 如果是确认/取消输入，优先处理当前 session_key 下的 pending_action
+-> 根据 user_id + conversation_id 生成 pending_intent key
+-> 如果是确认/取消输入，优先走 Java pending_action 确认/取消逻辑
+-> 如果当前会话有 pending_intent，优先把本轮 message 当作补充字段合并
 -> 如果是能力询问，调用 get_agent_capabilities
 -> 如果是工单查询，抽取 status / priority / keyword，调用 search_tickets
 -> 如果是创建工单，抽取 title / description / priority
-   -> 如果字段缺失，返回追问
-   -> 如果字段完整，保存当前 session_key 下的 pending_action，等待确认
+   -> 如果字段缺失，保存 pending_intent 并返回 MISSING_FIELDS
+   -> 如果字段完整，创建 Java pending_action，等待确认
 -> 如果是修改工单状态，抽取 ticket_id / status
-   -> 如果字段缺失，返回追问
-   -> 如果字段完整且预校验通过，保存当前 session_key 下的 pending_action，等待确认
--> 否则走 LLMService.chat(message)
+   -> 如果字段缺失，保存 pending_intent 并返回 MISSING_FIELDS
+   -> 如果字段完整，创建 Java pending_action，等待确认
+-> 回复建议、摘要、优先级建议、分类建议、相似工单、SLA 风险如果缺 ticket_id，也会保存 pending_intent 继续追问
+-> 否则返回 UNKNOWN_INTENT
 ```
 
 ## Java API create_ticket 创建工单
@@ -940,44 +1100,44 @@ pytest
 
 ```text
 用户提出创建或修改请求
--> Agent 根据 conversation_id 或 user_id 生成 session_key
+-> Agent 根据 user_id + conversation_id 定位 pending_intent
 -> Agent 抽取参数并校验
--> 保存当前 session_key 下的 pending_action
--> 返回确认提示
+-> 如果字段缺失，保存 Python pending_intent 并追问
+-> 用户补充字段后合并 pending_intent
+-> 字段完整后清理 pending_intent
+-> 创建 Java pending_action
+-> 返回 PENDING_CONFIRMATION
 -> 用户回复“确认”
--> 只读取当前 session_key 下的 pending_action
--> 执行 pending_action 对应 Tool
--> 清空当前 session_key 下的 pending_action
+-> Python 使用当前请求 auth_token 调 Java confirm
+-> Java 校验当前用户和会话
+-> Java 执行 pending_action 对应业务动作
+-> Java 将 pending_action 标记为 CONFIRMED
 ```
 
 取消流程：
 
 ```text
 用户提出创建或修改请求
--> Agent 保存当前 session_key 下的 pending_action
+-> Agent 可能保存了 Python pending_intent 或 Java pending_action
 -> 用户回复“取消”
--> 不执行 Tool
--> 清空当前 session_key 下的 pending_action
+-> Python 清理当前 user_id + conversation_id 下的 pending_intent
+-> Python 调 Java cancel 当前会话的 pending_action
+-> 不执行创建、修改状态、保存回复建议
 ```
 
-`pending_action` 保存待确认的写操作，结构类似：
+Java `pending_action` 保存待确认的写操作，payload 结构类似：
 
 ```json
 {
-  "tool_name": "update_ticket_status",
-  "args": {
-    "ticket_id": 3,
-    "status": "DONE"
-  },
-  "summary": "将 3 号工单状态修改为 DONE",
-  "action_type": "write",
-  "created_at": 1710000000.0
+  "actionType": "UPDATE_TICKET_STATUS",
+  "payload": {
+    "ticketId": 3,
+    "status": "PROCESSING"
+  }
 }
 ```
 
-`create_ticket` 的 pending action 会保存 `title`、`description`、`priority`；`update_ticket_status` 的 pending action 会保存 `ticket_id` 和目标 `status`。如果请求中传入了 `auth_token`，当前实现也会把该 token 暂存在内存 pending action 中，便于确认请求没有再次传 token 时继续调用 Java。用户确认后，系统根据 `tool_name` 调用对应 Tool；用户取消后，系统只清空 pending action，不执行 Tool。
-
-当前使用 `AgentStateService` + `PendingActionStore` 把 pending action 按 `session_key` 保存在内存中。这个实现适合学习流程，但服务重启后会丢失状态，多 worker 部署时也不能共享状态。生产化时不要长期把敏感 token 保存在内存状态中，后续可以升级为 LangGraph State + interrupt，或者把待确认动作和授权上下文交给 Java 后端管理。
+`create_ticket` 的 Java pending action 保存 `title`、`content`、`priority`；`update_ticket_status` 的 Java pending action 保存 `ticketId` 和目标 `status`。pending action 不保存 token，确认时必须重新携带当前有效 `auth_token`。
 
 创建工单确认流程，第一步发起创建请求：
 
@@ -1171,14 +1331,12 @@ Ticket not found: ID
 保存、确认、取消 pending action 时会记录：
 
 ```text
-Pending action created: create_ticket session_key=user:1
-Pending action created: update_ticket_status session_key=conversation:chat-001
-Pending action approved: create_ticket session_key=user:1
-Pending action approved: update_ticket_status session_key=conversation:chat-001
-Pending action cancelled: create_ticket session_key=user:1
-Pending action cancelled: update_ticket_status session_key=conversation:chat-001
-Pending action executed and cleared session_key=conversation:chat-001
-No pending action to approve for session_key=conversation:chat-001
+Create ticket missing fields: [...]
+Update ticket status missing fields: [...]
+Java pending action created: create_ticket conversation_id=chat-001
+Java pending action created: update_ticket_status conversation_id=chat-001
+Java pending action confirm failed: conversation_id=chat-001 status_code=400
+Java pending action cancel failed: conversation_id=chat-001 status_code=400
 ```
 
 没有触发 Tool、走普通 LLMService 时会记录：
@@ -1237,4 +1395,4 @@ pytest
 
 ## 下一阶段计划
 
-下一阶段可以把当前内存 pending action 升级为 LangGraph State + interrupt，或者把待确认操作交给 Java 后端保存，解决服务重启和多 worker 场景下的状态共享问题。
+下一阶段可以把当前开发用内存 `pending_intent` 升级为 Redis 或 Java 表，解决服务重启和多 worker 场景下的状态共享问题；也可以继续增强字段提取能力，让用户用更自然的多轮表达补齐标题、描述、优先级和工单 ID。

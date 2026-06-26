@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 import pytest
 
@@ -77,6 +79,22 @@ def test_search_tickets_parses_ticket_dto_when_optional_fields_missing(
     assert tickets[0].description is None
     assert tickets[0].priority is None
     assert tickets[0].createdBy is None
+
+
+def test_list_tickets_delegates_to_search_tickets(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = JavaTicketClient(token="java-token")
+    seen_query = {}
+
+    def fake_request(*args, **kwargs) -> list[dict]:
+        seen_query.update(kwargs["params"])
+        return [{"id": 3, "title": "登录失败", "status": "OPEN"}]
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    tickets = client.list_tickets("java-token", {"keyword": "登录"})
+
+    assert seen_query["keyword"] == "登录"
+    assert tickets[0].id == 3
 
 
 def test_get_ticket_detail_parses_ticket_detail_dto(
@@ -480,3 +498,36 @@ def test_headers_require_authorization() -> None:
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.message == "登录状态已失效，请重新登录。"
+
+
+def test_request_logs_do_not_include_full_token(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class SuccessClient:
+        def __init__(self, timeout: float) -> None:
+            self.timeout = timeout
+
+        def __enter__(self) -> "SuccessClient":
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, *args, **kwargs) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"code": 200, "message": "ok", "data": []},
+            )
+
+    monkeypatch.setattr(httpx, "Client", SuccessClient)
+    caplog.set_level(logging.INFO, logger="app.clients.java_ticket_client")
+
+    JavaTicketClient(token="java-token")._request(
+        "GET",
+        "/tickets",
+        auth_token="Bearer full-secret-token",
+    )
+
+    assert "full-secret-token" not in caplog.text
+    assert "Bearer full-secret-token" not in caplog.text

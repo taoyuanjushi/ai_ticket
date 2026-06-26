@@ -18,6 +18,7 @@ describe("http auth handling", () => {
   it("recognizes Java token expired messages", () => {
     expect(isAuthExpiredMessage("Token格式错误")).toBe(true);
     expect(isAuthExpiredMessage("登录状态已失效，请重新登录。")).toBe(true);
+    expect(isAuthExpiredMessage("请重新登录")).toBe(true);
     expect(isAuthExpiredMessage("token invalid")).toBe(true);
   });
 
@@ -29,5 +30,15 @@ describe("http auth handling", () => {
     expect(cleared).toBe(true);
     expect(useAuthStore.getState().token).toBeNull();
     expect(useAuthStore.getState().user).toBeNull();
+  });
+
+  it("does not clear local auth state for permission failures", () => {
+    useAuthStore.getState().setSession("token", testUser);
+
+    const cleared = clearAuthSessionIfExpired(403, "你没有权限执行该操作。");
+
+    expect(cleared).toBe(false);
+    expect(useAuthStore.getState().token).toBe("token");
+    expect(useAuthStore.getState().user).toEqual(testUser);
   });
 });

@@ -1,0 +1,109 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: ticket-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./java/hello-demo/src/main/resources/sql/user.sql:/docker-entrypoint-initdb.d/01-user.sql:ro
+      - ./java/hello-demo/src/main/resources/sql/ticket.sql:/docker-entrypoint-initdb.d/02-ticket.sql:ro
+      - ./java/hello-demo/src/main/resources/sql/ticket_reply.sql:/docker-entrypoint-initdb.d/03-ticket_reply.sql:ro
+      - ./java/hello-demo/src/main/resources/sql/operation_log.sql:/docker-entrypoint-initdb.d/04-operation_log.sql:ro
+      - ./java/hello-demo/src/main/resources/sql/ai_pending_action.sql:/docker-entrypoint-initdb.d/05-ai_pending_action.sql:ro
+      - ./docs/stage5-test-data.sql:/docker-entrypoint-initdb.d/99-stage5-test-data.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - ticket-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: ticket-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - ticket-net
+
+  java-backend:
+    build:
+      context: ./java/hello-demo
+    container_name: ticket-java-backend
+    restart: unless-stopped
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/${DB_NAME}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=utf8
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DATABASE: ${REDIS_DATABASE:-0}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION}
+      AI_SERVICE_BASE_URL: http://python-ai:8001
+      MYBATIS_LOG_IMPL: ${MYBATIS_LOG_IMPL:-org.apache.ibatis.logging.nologging.NoLoggingImpl}
+      TZ: Asia/Shanghai
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ticket-net
+
+  python-ai:
+    build:
+      context: ./ticket-agent-python
+    container_name: ticket-python-ai
+    restart: unless-stopped
+    environment:
+      APP_ENV: prod
+      LOG_LEVEL: INFO
+      JAVA_API_BASE_URL: http://java-backend:8080
+      JAVA_API_TIMEOUT: ${JAVA_API_TIMEOUT:-10}
+      LLM_MOCK_MODE: ${LLM_MOCK_MODE:-false}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_API_BASE_URL: ${LLM_API_BASE_URL}
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-30}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
+      TZ: Asia/Shanghai
+    depends_on:
+      - java-backend
+    networks:
+      - ticket-net
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+    container_name: ticket-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8088}:80"
+    depends_on:
+      - java-backend
+    networks:
+      - ticket-net
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  ticket-net:
+    driver: bridge

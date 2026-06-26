@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.api import agent_api
 from app.main import app
+from app.schemas.pending_action import AiPendingActionType
 from app.services.agent_tool_service import UNKNOWN_INTENT_ANSWER
 from app.tools.mock_ticket_data import MOCK_TICKETS, reset_mock_tickets
 from app.tools.ticket_tools import find_ticket_by_id, search_tickets
@@ -67,7 +68,8 @@ def test_create_ticket_request_creates_pending_action_without_creating_ticket() 
     )
 
     assert response.status_code == 200
-    assert "请确认：是否创建以下工单" in response.json()["answer"]
+    assert response.json()["type"] == "PENDING_CONFIRMATION"
+    assert response.json()["data"]["actionType"] == AiPendingActionType.CREATE_TICKET.value
     assert has_java_pending_action() is True
     assert len(MOCK_TICKETS) == 5
 
@@ -108,7 +110,7 @@ def test_create_ticket_cancel_does_not_execute_and_clears_pending_action() -> No
     response = client.post("/agent/chat", json={"message": "取消", "auth_token": AUTH_TOKEN})
 
     assert response.status_code == 200
-    assert response.json()["answer"] == "已取消创建工单，本次操作未执行。"
+    assert response.json()["answer"] == "已取消当前待补充或待确认的操作。"
     assert has_java_pending_action() is False
     assert len(MOCK_TICKETS) == 5
 
@@ -120,7 +122,11 @@ def test_update_ticket_status_request_creates_pending_action_without_modifying()
     )
 
     assert response.status_code == 200
-    assert "请确认：是否将 1 号工单状态修改为 PROCESSING" in response.json()["answer"]
+    assert response.json()["type"] == "PENDING_CONFIRMATION"
+    assert response.json()["data"] == {
+        "actionType": AiPendingActionType.UPDATE_TICKET_STATUS.value,
+        "payload": {"ticket_id": 1, "target_status": "PROCESSING"},
+    }
     assert has_java_pending_action() is True
     assert find_ticket_by_id(1)["status"] == "OPEN"
 
@@ -150,7 +156,7 @@ def test_update_ticket_status_cancel_does_not_execute_and_clears_pending_action(
     response = client.post("/agent/chat", json={"message": "取消", "auth_token": AUTH_TOKEN})
 
     assert response.status_code == 200
-    assert response.json()["answer"] == "已取消修改工单状态，本次操作未执行。"
+    assert response.json()["answer"] == "已取消当前待补充或待确认的操作。"
     assert has_java_pending_action() is False
     assert find_ticket_by_id(1)["status"] == "OPEN"
 
@@ -172,7 +178,7 @@ def test_cancel_without_pending_action_does_not_execute_any_tool() -> None:
     response = client.post("/agent/chat", json={"message": "取消", "auth_token": AUTH_TOKEN})
 
     assert response.status_code == 200
-    assert response.json()["answer"] == "当前会话没有待取消的操作。"
+    assert response.json()["answer"] == "已取消当前待补充或待确认的操作。"
     assert len(MOCK_TICKETS) == before_count
     assert find_ticket_by_id(1)["status"] == "OPEN"
 
@@ -215,7 +221,8 @@ def test_create_ticket_intent_does_not_call_direct_create_tool(
     )
 
     assert response.status_code == 200
-    assert "请确认：是否创建以下工单" in response.json()["answer"]
+    assert response.json()["type"] == "PENDING_CONFIRMATION"
+    assert response.json()["data"]["actionType"] == AiPendingActionType.CREATE_TICKET.value
     assert has_java_pending_action() is True
     assert len(MOCK_TICKETS) == 5
 
@@ -239,7 +246,8 @@ def test_update_status_intent_does_not_call_direct_update_tool(
     )
 
     assert response.status_code == 200
-    assert "请确认：是否将 1 号工单状态修改为 PROCESSING" in response.json()["answer"]
+    assert response.json()["type"] == "PENDING_CONFIRMATION"
+    assert response.json()["data"]["actionType"] == AiPendingActionType.UPDATE_TICKET_STATUS.value
     assert has_java_pending_action() is True
     assert find_ticket_by_id(1)["status"] == "OPEN"
 
@@ -251,7 +259,11 @@ def test_update_ticket_status_ticket_not_found_does_not_save_pending_action() ->
     )
 
     assert response.status_code == 200
-    assert "请确认：是否将 999 号工单状态修改为 PROCESSING" in response.json()["answer"]
+    assert response.json()["type"] == "PENDING_CONFIRMATION"
+    assert response.json()["data"]["payload"] == {
+        "ticket_id": 999,
+        "target_status": "PROCESSING",
+    }
     assert has_java_pending_action() is True
 
     confirm_response = client.post(
@@ -269,7 +281,11 @@ def test_update_ticket_status_invalid_transition_confirms_then_returns_error() -
     )
 
     assert response.status_code == 200
-    assert "请确认：是否将 2 号工单状态修改为 OPEN" in response.json()["answer"]
+    assert response.json()["type"] == "PENDING_CONFIRMATION"
+    assert response.json()["data"]["payload"] == {
+        "ticket_id": 2,
+        "target_status": "OPEN",
+    }
     assert has_java_pending_action() is True
 
     confirm_response = client.post(

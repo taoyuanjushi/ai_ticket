@@ -11,6 +11,7 @@ public class TicketQueryRequest {
     private String status;
     private String priority;
     private String category;
+    private String assignedTo;
     private String keyword;
 
     public TicketQueryRequest() {
@@ -54,6 +55,14 @@ public class TicketQueryRequest {
 
     public void setCategory(String category) {
         this.category = category;
+    }
+
+    public String getAssignedTo() {
+        return assignedTo;
+    }
+
+    public void setAssignedTo(String assignedTo) {
+        this.assignedTo = assignedTo;
     }
 
     public String getKeyword() {

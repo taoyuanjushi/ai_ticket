@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { normalizeCurrentUser } from "../auth/permissions";
 import type { CurrentUser } from "../types/domain";
 
 const tokenStorageKey = "ticketdesk.token";
@@ -16,17 +17,20 @@ export const useAuthStore = create<AuthState>((set) => ({
   token: localStorage.getItem(tokenStorageKey),
   user: readStoredUser(),
   setSession: (token, user) => {
+    const normalizedUser = normalizeCurrentUser(user);
     localStorage.setItem(tokenStorageKey, token);
-    localStorage.setItem(userStorageKey, JSON.stringify(user));
-    set({ token, user });
+    localStorage.setItem(userStorageKey, JSON.stringify(normalizedUser));
+    set({ token, user: normalizedUser });
   },
   setUser: (user) => {
     if (user) {
-      localStorage.setItem(userStorageKey, JSON.stringify(user));
+      const normalizedUser = normalizeCurrentUser(user);
+      localStorage.setItem(userStorageKey, JSON.stringify(normalizedUser));
+      set({ user: normalizedUser });
     } else {
       localStorage.removeItem(userStorageKey);
+      set({ user: null });
     }
-    set({ user });
   },
   clearSession: () => {
     localStorage.removeItem(tokenStorageKey);
@@ -41,7 +45,7 @@ function readStoredUser(): CurrentUser | null {
     return null;
   }
   try {
-    return JSON.parse(raw) as CurrentUser;
+    return normalizeCurrentUser(JSON.parse(raw) as CurrentUser);
   } catch {
     localStorage.removeItem(userStorageKey);
     return null;

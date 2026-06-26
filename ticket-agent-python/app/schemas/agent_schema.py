@@ -43,3 +43,7 @@ class AgentChatRequest(BaseModel):
 
 class AgentChatResponse(BaseModel):
     answer: str
+    type: str = "NORMAL"
+    message: str | None = None
+    data: Any | None = None
+    risk_flags: list[str] = Field(default_factory=list)

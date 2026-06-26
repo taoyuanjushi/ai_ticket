@@ -1,10 +1,11 @@
 import type {
   AiChatResponse,
+  BusinessType,
   CurrentUser,
   LoginResponse,
   OperationLog,
+  OperationType,
   PageResult,
-  ReplySuggestionResponse,
   Ticket,
   TicketDetail,
   TicketPriority,
@@ -14,7 +15,7 @@ import type {
 } from "../types/domain";
 
 type MockOptions = {
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   query?: Record<string, string | number | undefined | null>;
 };
@@ -126,6 +127,47 @@ export async function mockFetch<T>(path: string, options: MockOptions = {}): Pro
     return ticket as T;
   }
 
+  const ticketAssigneeMatch = route.match(/^\/tickets\/(\d+)\/assignee$/);
+  if (ticketAssigneeMatch && method === "PATCH") {
+    const ticket = findTicket(Number(ticketAssigneeMatch[1]));
+    const body = options.body as { assignedTo?: number | null };
+    ticket.assignedTo = body.assignedTo ?? null;
+    ticket.assignedUserName = body.assignedTo
+      ? users.find((user) => user.id === body.assignedTo)?.name ?? null
+      : null;
+    ticket.updatedAt = now();
+    logs.unshift(makeLog(nextId(logs), currentUser().id, "TICKET_ASSIGNEE_UPDATED", "TICKET", ticket.id, `Ticket #${ticket.id} assignee updated`, 0));
+    return ticket as T;
+  }
+
+  const aiReplyPendingMatch = route.match(/^\/tickets\/(\d+)\/ai-replies\/pending$/);
+  if (aiReplyPendingMatch && method === "POST") {
+    const body = options.body as { conversationId: string; content: string };
+    return buildPendingResponse(
+      "请确认是否保存该 AI 回复建议。",
+      "SAVE_AI_REPLY",
+      {
+        ticketId: Number(aiReplyPendingMatch[1]),
+        content: body.content,
+      },
+    ) as T;
+  }
+
+  const categoryPendingMatch = route.match(/^\/tickets\/(\d+)\/category\/pending$/);
+  if (categoryPendingMatch && method === "POST") {
+    const body = options.body as { conversationId: string; category: string; confidence?: number; reason?: string };
+    return buildPendingResponse(
+      `请确认是否将该工单分类更新为：${body.category}。`,
+      "APPLY_AI_CATEGORY",
+      {
+        ticketId: Number(categoryPendingMatch[1]),
+        category: body.category,
+        confidence: body.confidence,
+        reason: body.reason,
+      },
+    ) as T;
+  }
+
   const ticketMatch = route.match(/^\/tickets\/(\d+)$/);
   if (ticketMatch && method === "PUT") {
     const ticket = findTicket(Number(ticketMatch[1]));
@@ -196,24 +238,17 @@ export async function mockFetch<T>(path: string, options: MockOptions = {}): Pro
     return listLogs(options.query ?? {}) as T;
   }
 
+  const ticketLogsMatch = route.match(/^\/tickets\/(\d+)\/logs$/);
+  if (ticketLogsMatch && method === "GET") {
+    return listLogs({ ...(options.query ?? {}), ticketId: Number(ticketLogsMatch[1]) }) as T;
+  }
+
   if (route === "/ai/chat" && method === "POST") {
     const body = options.body as { message: string };
     const answer = buildMockAiChatAnswer(body.message);
     return {
       answer,
     } as AiChatResponse as T;
-  }
-
-  const suggestionMatch = route.match(/^\/ai\/tickets\/(\d+)\/reply-suggestion$/);
-  if (suggestionMatch && method === "POST") {
-    const ticket = findTicket(Number(suggestionMatch[1]));
-    return {
-      ticket_id: ticket.id,
-      suggestion: `Confirm whether "${ticket.title}" is still reproducible, ask for timestamp, screenshot, and steps, then move the ticket into processing if the details are sufficient.`,
-      confidence: 0.82,
-      reason: "Generated from ticket title, content, status, and reply history.",
-      risk_flags: ["需要人工确认"],
-    } as ReplySuggestionResponse as T;
   }
 
   throw new Error(`Mock route not implemented: ${method} ${route}`);
@@ -253,7 +288,7 @@ function listTickets(query: Record<string, string | number | undefined | null>):
   }
   if (status) result = result.filter((ticket) => ticket.status === status);
   if (priority) result = result.filter((ticket) => ticket.priority === priority);
-  if (category) result = result.filter((ticket) => ticket.category.toUpperCase() === category);
+  if (category) result = result.filter((ticket) => (ticket.category ?? "").toUpperCase() === category);
   if (keyword) {
     result = result.filter((ticket) => ticket.title.toLowerCase().includes(keyword) || ticket.content.toLowerCase().includes(keyword));
   }
@@ -265,10 +300,10 @@ function listTickets(query: Record<string, string | number | undefined | null>):
 function listLogs(query: Record<string, string | number | undefined | null>): PageResult<OperationLog> {
   const page = Number(query.page ?? 1);
   const size = Number(query.size ?? 10);
-  let result = [...logs];
-  if (query.userId) result = result.filter((log) => log.userId === Number(query.userId));
-  if (query.operationType) result = result.filter((log) => log.operationType === query.operationType);
-  if (query.businessType) result = result.filter((log) => log.businessType === query.businessType);
+  let result = [...logs].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  if (query.ticketId) result = result.filter((log) => log.ticketId === Number(query.ticketId));
+  if (query.operatorId) result = result.filter((log) => log.operatorId === Number(query.operatorId));
+  if (query.action) result = result.filter((log) => log.action === query.action);
   const start = (page - 1) * size;
   return { records: result.slice(start, start + size), total: result.length, page, size };
 }
@@ -291,6 +326,22 @@ function findTicket(id: number) {
 
 function buildMockAiChatAnswer(message: string) {
   const ticketId = extractTicketId(message);
+  if (message.includes("创建") || message.includes("新建") || message.includes("提一个工单")) {
+    return JSON.stringify({
+      type: "PENDING_CONFIRMATION",
+      message: "请确认是否创建该工单。",
+      data: null,
+      risk_flags: [],
+    });
+  }
+  if (message.includes("改成") || message.includes("改为") || message.includes("修改状态")) {
+    return JSON.stringify({
+      type: "PENDING_CONFIRMATION",
+      message: `请确认是否修改 ${ticketId} 号工单状态。`,
+      data: null,
+      risk_flags: [],
+    });
+  }
   if (message.includes("总结")) {
     return JSON.stringify({
       summary: `${ticketId} 号工单当前需要客服继续跟进。`,
@@ -344,6 +395,18 @@ function buildMockAiChatAnswer(message: string) {
   return `Received: "${message}". I can help query tickets, create tickets, change status, and draft replies.`;
 }
 
+function buildPendingResponse(message: string, actionType: string, payload: Record<string, unknown>): AiChatResponse {
+  return {
+    type: "PENDING_CONFIRMATION",
+    message,
+    data: {
+      actionType,
+      payload,
+    },
+    risk_flags: ["需要人工确认"],
+  };
+}
+
 function extractTicketId(message: string) {
   const match = message.match(/(\d+)\s*号工单/);
   return match?.[1] ?? "当前";
@@ -359,8 +422,25 @@ function makeReply(id: number, ticketId: number, userId: number, content: string
   return { id, ticketId, userId, content, replyType, createdAt: timestamp, updatedAt: timestamp };
 }
 
-function makeLog(id: number, userId: number, operationType: OperationLog["operationType"], businessType: OperationLog["businessType"], businessId: number, content: string, offsetMinutes: number): OperationLog {
-  return { id, userId, operationType, businessType, businessId, content, createdAt: time(offsetMinutes) };
+function makeLog(
+  id: number,
+  operatorId: number,
+  action: OperationType,
+  businessType: BusinessType,
+  businessId: number,
+  detail: string,
+  offsetMinutes: number,
+): OperationLog {
+  const operator = users.find((user) => user.id === operatorId);
+  return {
+    id,
+    ticketId: businessType === "TICKET" ? businessId : null,
+    operatorId,
+    operatorName: operator?.name ?? `user#${operatorId}`,
+    action,
+    detail,
+    createdAt: time(offsetMinutes),
+  };
 }
 
 function nextId(items: Array<{ id: number }>) {

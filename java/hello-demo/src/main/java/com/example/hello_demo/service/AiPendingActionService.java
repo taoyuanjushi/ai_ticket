@@ -4,8 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.hello_demo.dto.AiPendingActionConfirmResponse;
 import com.example.hello_demo.dto.AiPendingActionCreateRequest;
+import com.example.hello_demo.dto.AiPendingConfirmationResponse;
 import com.example.hello_demo.dto.AiPendingActionResponse;
+import com.example.hello_demo.dto.AiCategoryPendingRequest;
+import com.example.hello_demo.dto.AiReplyPendingRequest;
 import com.example.hello_demo.dto.AiReplyCreateDTO;
+import com.example.hello_demo.dto.TicketCategoryUpdateRequest;
 import com.example.hello_demo.dto.TicketCreateDTO;
 import com.example.hello_demo.entity.AiPendingAction;
 import com.example.hello_demo.entity.Ticket;
@@ -62,6 +66,7 @@ public class AiPendingActionService {
         Map<String, Object> payload = requirePayload(request.getPayload());
         rejectSensitivePayload(payload);
         validatePayload(actionType, payload);
+        validateActionCreationPermission(actionType, payload);
 
         cancelExistingPendingActions(currentUserId, conversationId);
 
@@ -82,8 +87,61 @@ public class AiPendingActionService {
                 action.getId(),
                 "创建 AI 待确认动作：" + actionType.name() + "，conversationId=" + safeText(conversationId, 80)
         );
+        recordSpecificPendingCreatedLog(action, actionType, payload);
 
         return toResponse(action);
+    }
+
+    @Transactional
+    public AiPendingConfirmationResponse createSaveAiReplyPending(
+            Long ticketId,
+            AiReplyPendingRequest request) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("ticketId", requirePositiveId(ticketId, "ticketId"));
+        payload.put("content", requireRequestText(request == null ? null : request.getContent(), "content"));
+        payload.put("source", "AI_REPLY_SUGGESTION");
+
+        AiPendingActionResponse pendingAction = createPendingAction(
+                createPendingRequest(
+                        request == null ? null : request.getConversationId(),
+                        AiPendingActionType.SAVE_AI_REPLY,
+                        payload
+                )
+        );
+
+        return toPendingConfirmationResponse(
+                "请确认是否保存这条 AI 回复。",
+                pendingAction
+        );
+    }
+
+    @Transactional
+    public AiPendingConfirmationResponse createApplyCategoryPending(
+            Long ticketId,
+            AiCategoryPendingRequest request) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("ticketId", requirePositiveId(ticketId, "ticketId"));
+        payload.put("category", requireRequestText(request == null ? null : request.getCategory(), "category"));
+        if (request != null && request.getConfidence() != null) {
+            payload.put("confidence", request.getConfidence());
+        }
+        String reason = optionalRequestText(request == null ? null : request.getReason());
+        if (reason != null) {
+            payload.put("reason", reason);
+        }
+
+        AiPendingActionResponse pendingAction = createPendingAction(
+                createPendingRequest(
+                        request == null ? null : request.getConversationId(),
+                        AiPendingActionType.APPLY_AI_CATEGORY,
+                        payload
+                )
+        );
+
+        return toPendingConfirmationResponse(
+                "请确认是否将该工单分类更新为：" + payload.get("category") + "。",
+                pendingAction
+        );
     }
 
     public AiPendingActionResponse getCurrentPendingAction(String conversationId) {
@@ -138,6 +196,7 @@ public class AiPendingActionService {
                 action.getId(),
                 buildConfirmedLogContent(action, payload)
         );
+        recordSpecificConfirmedLog(action, payload, result);
 
         AiPendingActionConfirmResponse response = new AiPendingActionConfirmResponse();
         response.setPendingAction(toResponse(action));
@@ -180,6 +239,13 @@ public class AiPendingActionService {
                 BusinessType.AI_PENDING_ACTION.name(),
                 action.getId(),
                 "取消 AI 写操作：" + action.getActionType()
+                        + "，conversationId=" + safeText(action.getConversationId(), 80)
+        );
+        operationLogService.record(
+                OperationType.AI_ACTION_CANCELLED.name(),
+                BusinessType.AI_PENDING_ACTION.name(),
+                action.getId(),
+                "取消 AI 待确认动作：" + action.getActionType()
                         + "，conversationId=" + safeText(action.getConversationId(), 80)
         );
 
@@ -256,6 +322,21 @@ public class AiPendingActionService {
             return reply;
         }
 
+        if (actionType == AiPendingActionType.APPLY_AI_CATEGORY) {
+            Long ticketId = requireLong(payload, "ticketId");
+            Ticket before = ticketService.getTicketById(ticketId);
+            TicketCategoryUpdateRequest request = new TicketCategoryUpdateRequest();
+            request.setCategory(requireText(payload, "category"));
+            Ticket after = ticketService.updateTicketCategory(ticketId, request);
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("id", after.getId());
+            result.put("oldCategory", before.getCategory());
+            result.put("newCategory", after.getCategory());
+            result.put("ticket", after);
+            return result;
+        }
+
         throw new BusinessException(400, "actionType不支持");
     }
 
@@ -264,7 +345,8 @@ public class AiPendingActionService {
                 "确认执行 AI 写操作：" + action.getActionType()
                         + "，conversationId=" + safeText(action.getConversationId(), 80)
         );
-        if (AiPendingActionType.SAVE_AI_REPLY.name().equals(action.getActionType())) {
+        if (AiPendingActionType.SAVE_AI_REPLY.name().equals(action.getActionType())
+                || AiPendingActionType.APPLY_AI_CATEGORY.name().equals(action.getActionType())) {
             appendOptionalLogField(content, "confidence", payload.get("confidence"));
             appendOptionalLogField(content, "reason", payload.get("reason"));
             Object riskFlags = payload.containsKey("riskFlags")
@@ -299,7 +381,30 @@ public class AiPendingActionService {
         }
         if (actionType == AiPendingActionType.SAVE_AI_REPLY) {
             requireLong(payload, "ticketId");
-            requireText(payload, "content");
+            requireMaxLength(requireText(payload, "content"), "content", 2000);
+            return;
+        }
+        if (actionType == AiPendingActionType.APPLY_AI_CATEGORY) {
+            requireLong(payload, "ticketId");
+            requireMaxLength(requireText(payload, "category"), "category", 64);
+            validateOptionalConfidence(payload.get("confidence"));
+        }
+    }
+
+    private void validateActionCreationPermission(AiPendingActionType actionType, Map<String, Object> payload) {
+        if (actionType == AiPendingActionType.UPDATE_TICKET_STATUS) {
+            PermissionUtil.requireStaffOrAdmin();
+            ticketService.getTicketById(requireLong(payload, "ticketId"));
+            return;
+        }
+        if (actionType == AiPendingActionType.SAVE_AI_REPLY) {
+            PermissionUtil.requireStaffOrAdmin();
+            ticketService.getTicketById(requireLong(payload, "ticketId"));
+            return;
+        }
+        if (actionType == AiPendingActionType.APPLY_AI_CATEGORY) {
+            PermissionUtil.requireStaffOrAdmin();
+            ticketService.getTicketById(requireLong(payload, "ticketId"));
         }
     }
 
@@ -381,6 +486,148 @@ public class AiPendingActionService {
             }
         }
         throw new BusinessException(400, key + "不能为空");
+    }
+
+    private Long requirePositiveId(Long id, String key) {
+        if (id == null) {
+            throw new BusinessException(400, key + "不能为空");
+        }
+        if (id < 1) {
+            throw new BusinessException(400, key + "不能小于1");
+        }
+        return id;
+    }
+
+    private String requireRequestText(String value, String key) {
+        String text = optionalRequestText(value);
+        if (text == null) {
+            throw new BusinessException(400, key + "不能为空");
+        }
+        return text;
+    }
+
+    private String optionalRequestText(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private void requireMaxLength(String value, String key, int maxLength) {
+        if (value != null && value.length() > maxLength) {
+            throw new BusinessException(400, key + "长度不能超过" + maxLength);
+        }
+    }
+
+    private void validateOptionalConfidence(Object value) {
+        if (value == null) {
+            return;
+        }
+        double confidence;
+        if (value instanceof Number number) {
+            confidence = number.doubleValue();
+        } else {
+            try {
+                confidence = Double.parseDouble(String.valueOf(value));
+            } catch (NumberFormatException e) {
+                throw new BusinessException(400, "confidence参数格式不正确");
+            }
+        }
+        if (confidence < 0.0 || confidence > 1.0) {
+            throw new BusinessException(400, "confidence必须在0到1之间");
+        }
+    }
+
+    private AiPendingActionCreateRequest createPendingRequest(
+            String conversationId,
+            AiPendingActionType actionType,
+            Map<String, Object> payload) {
+        AiPendingActionCreateRequest request = new AiPendingActionCreateRequest();
+        request.setConversationId(conversationId);
+        request.setActionType(actionType.name());
+        request.setPayload(payload);
+        return request;
+    }
+
+    private AiPendingConfirmationResponse toPendingConfirmationResponse(
+            String message,
+            AiPendingActionResponse pendingAction) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", pendingAction.getId());
+        data.put("actionType", pendingAction.getActionType());
+        data.put("ticketId", pendingAction.getPayload().get("ticketId"));
+        data.put("payload", pendingAction.getPayload());
+
+        AiPendingConfirmationResponse response = new AiPendingConfirmationResponse();
+        response.setType("PENDING_CONFIRMATION");
+        response.setMessage(message);
+        response.setData(data);
+        response.setRiskFlags(java.util.List.of());
+        return response;
+    }
+
+    private void recordSpecificPendingCreatedLog(
+            AiPendingAction action,
+            AiPendingActionType actionType,
+            Map<String, Object> payload) {
+        if (actionType == AiPendingActionType.SAVE_AI_REPLY) {
+            operationLogService.record(
+                    OperationType.AI_REPLY_SAVE_PENDING_CREATED.name(),
+                    BusinessType.AI_PENDING_ACTION.name(),
+                    action.getId(),
+                    "用户发起保存 AI 回复确认，工单ID=" + payload.get("ticketId")
+            );
+            return;
+        }
+        if (actionType == AiPendingActionType.APPLY_AI_CATEGORY) {
+            operationLogService.record(
+                    OperationType.AI_CATEGORY_APPLY_PENDING_CREATED.name(),
+                    BusinessType.AI_PENDING_ACTION.name(),
+                    action.getId(),
+                    "用户发起采纳 AI 分类确认，工单ID=" + payload.get("ticketId")
+                            + "，分类=" + safeText(String.valueOf(payload.get("category")), 64)
+            );
+        }
+    }
+
+    private void recordSpecificConfirmedLog(
+            AiPendingAction action,
+            Map<String, Object> payload,
+            Object result) {
+        if (!AiPendingActionType.APPLY_AI_CATEGORY.name().equals(action.getActionType())) {
+            return;
+        }
+
+        String oldCategory = "";
+        String newCategory = String.valueOf(payload.get("category"));
+        Long ticketId = null;
+        if (result instanceof Map<?, ?> resultMap) {
+            Object idValue = resultMap.get("id");
+            ticketId = idValue instanceof Number number ? number.longValue() : null;
+            Object oldValue = resultMap.get("oldCategory");
+            Object newValue = resultMap.get("newCategory");
+            oldCategory = oldValue == null ? "" : String.valueOf(oldValue);
+            if (newValue != null) {
+                newCategory = String.valueOf(newValue);
+            }
+        }
+        if (ticketId == null) {
+            ticketId = requireLong(payload, "ticketId");
+        }
+
+        operationLogService.record(
+                OperationType.AI_CATEGORY_APPLIED.name(),
+                BusinessType.TICKET.name(),
+                ticketId,
+                "用户确认采纳 AI 分类，工单ID=" + ticketId
+                        + "，旧分类=" + displayForLog(oldCategory)
+                        + "，新分类=" + displayForLog(newCategory)
+        );
+    }
+
+    private String displayForLog(String value) {
+        String text = value == null ? "" : value.trim();
+        return text.isEmpty() ? "空" : safeText(text, 64);
     }
 
     private String toJson(Map<String, Object> payload) {

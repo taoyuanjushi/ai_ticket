@@ -1,6 +1,7 @@
 package com.example.hello_demo.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 
 /**
  * 新增工单请求对象。
@@ -16,6 +17,7 @@ public class TicketCreateDTO {
 
     private String priority;
 
+    @Size(max = 64, message = "工单分类长度不能超过64")
     private String category;
 
     public TicketCreateDTO() {

@@ -94,6 +94,12 @@ class TicketReplyServiceTest {
                 eq(10L),
                 eq("保存 AI 回复建议")
         );
+        verify(operationLogService).record(
+                eq(OperationType.AI_REPLY_SAVED.name()),
+                eq(BusinessType.TICKET_REPLY.name()),
+                eq(10L),
+                eq("用户确认保存 AI 回复，工单ID=1")
+        );
         verify(ticketCacheService).evictTicketRelated(1L);
     }
 

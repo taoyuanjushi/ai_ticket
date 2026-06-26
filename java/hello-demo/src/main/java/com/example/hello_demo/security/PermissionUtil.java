@@ -1,5 +1,9 @@
 package com.example.hello_demo.security;
 
+import com.example.hello_demo.entity.OperationLog;
+import com.example.hello_demo.entity.Ticket;
+import com.example.hello_demo.entity.User;
+import com.example.hello_demo.enums.BusinessType;
 import com.example.hello_demo.enums.UserRole;
 import com.example.hello_demo.exception.BusinessException;
 
@@ -62,5 +66,51 @@ public class PermissionUtil {
 
     public static boolean isStaffOrAdmin() {
         return UserRole.isStaffOrAdmin(CurrentUserContext.getRole());
+    }
+
+    public static boolean canViewTicketLogs(User currentUser, Ticket ticket) {
+        if (currentUser == null || ticket == null) {
+            return false;
+        }
+        return canViewTicketLogs(currentUser.getRole(), currentUser.getId(), ticket);
+    }
+
+    public static boolean canViewTicketLogs(String currentRole, Long currentUserId, Ticket ticket) {
+        if (ticket == null) {
+            return false;
+        }
+        if (UserRole.isAdmin(currentRole)) {
+            return true;
+        }
+        if (UserRole.isStaff(currentRole)) {
+            return true;
+        }
+        return false;
+    }
+
+    public static boolean canViewGlobalOperationLogs(User currentUser) {
+        return currentUser != null && canViewGlobalOperationLogs(currentUser.getRole());
+    }
+
+    public static boolean canViewGlobalOperationLogs(String currentRole) {
+        return UserRole.isStaffOrAdmin(currentRole);
+    }
+
+    public static boolean canViewOperationLogRecord(User currentUser, OperationLog log) {
+        return currentUser != null && canViewOperationLogRecord(currentUser.getRole(), log);
+    }
+
+    public static boolean canViewOperationLogRecord(String currentRole, OperationLog log) {
+        if (log == null) {
+            return false;
+        }
+        if (UserRole.isAdmin(currentRole)) {
+            return true;
+        }
+        if (UserRole.isStaff(currentRole)) {
+            return BusinessType.TICKET.name().equals(log.getBusinessType())
+                    || BusinessType.TICKET_REPLY.name().equals(log.getBusinessType());
+        }
+        return false;
     }
 }

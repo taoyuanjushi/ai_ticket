@@ -2,19 +2,28 @@ package com.example.hello_demo.controller;
 
 import com.example.hello_demo.common.PageResult;
 import com.example.hello_demo.common.Result;
+import com.example.hello_demo.dto.AiCategoryPendingRequest;
+import com.example.hello_demo.dto.AiPendingConfirmationResponse;
 import com.example.hello_demo.dto.AiReplyCreateDTO;
+import com.example.hello_demo.dto.AiReplyPendingRequest;
+import com.example.hello_demo.dto.TicketAssigneeUpdateRequest;
+import com.example.hello_demo.dto.TicketCategoryUpdateRequest;
 import com.example.hello_demo.dto.TicketCreateDTO;
 import com.example.hello_demo.dto.TicketQueryRequest;
 import com.example.hello_demo.dto.TicketStatusUpdateDTO;
 import com.example.hello_demo.dto.TicketUpdateRequest;
 import com.example.hello_demo.entity.Ticket;
 import com.example.hello_demo.entity.TicketReply;
-import com.example.hello_demo.service.TicketReplyService;
+import com.example.hello_demo.exception.BusinessException;
+import com.example.hello_demo.service.AiPendingActionService;
+import com.example.hello_demo.service.OperationLogService;
 import com.example.hello_demo.service.TicketService;
+import com.example.hello_demo.vo.OperationLogVO;
 import com.example.hello_demo.vo.TicketDetailVO;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -32,11 +41,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class TicketController {
 
     private final TicketService ticketService;
-    private final TicketReplyService ticketReplyService;
+    private final AiPendingActionService aiPendingActionService;
+    private final OperationLogService operationLogService;
 
-    public TicketController(TicketService ticketService, TicketReplyService ticketReplyService) {
+    public TicketController(
+            TicketService ticketService,
+            AiPendingActionService aiPendingActionService,
+            OperationLogService operationLogService) {
         this.ticketService = ticketService;
-        this.ticketReplyService = ticketReplyService;
+        this.aiPendingActionService = aiPendingActionService;
+        this.operationLogService = operationLogService;
     }
 
     /**
@@ -49,6 +63,7 @@ public class TicketController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String priority,
             @RequestParam(required = false) String category,
+            @RequestParam(required = false) String assignedTo,
             @RequestParam(required = false) String keyword) {
 
         TicketQueryRequest request = new TicketQueryRequest();
@@ -57,6 +72,7 @@ public class TicketController {
         request.setStatus(status);
         request.setPriority(priority);
         request.setCategory(category);
+        request.setAssignedTo(assignedTo);
         request.setKeyword(keyword);
 
         return Result.success(ticketService.getTickets(request));
@@ -76,6 +92,15 @@ public class TicketController {
     @GetMapping("/{id}/detail")
     public Result<TicketDetailVO> getTicketDetail(@PathVariable Long id) {
         return Result.success(ticketService.getTicketDetail(id));
+    }
+
+    @GetMapping("/{id}/logs")
+    public Result<PageResult<OperationLogVO>> getTicketLogs(
+            @PathVariable Long id,
+            @RequestParam(required = false) Long page,
+            @RequestParam(required = false) Long size) {
+
+        return Result.success(operationLogService.getTicketLogs(id, page, size));
     }
 
     /**
@@ -108,6 +133,30 @@ public class TicketController {
     }
 
     /**
+     * 修改工单分类。
+     */
+    @PatchMapping("/{id}/category")
+    public Result<Ticket> updateTicketCategory(
+            @PathVariable Long id,
+            @Valid @RequestBody TicketCategoryUpdateRequest request) {
+
+        Ticket updatedTicket = ticketService.updateTicketCategory(id, request);
+        return Result.success("分类修改成功", updatedTicket);
+    }
+
+    /**
+     * 分配或取消工单处理人。
+     */
+    @PatchMapping("/{id}/assignee")
+    public Result<Ticket> updateTicketAssignee(
+            @PathVariable Long id,
+            @Valid @RequestBody TicketAssigneeUpdateRequest request) {
+
+        Ticket updatedTicket = ticketService.updateTicketAssignee(id, request);
+        return Result.success("处理人修改成功", updatedTicket);
+    }
+
+    /**
      * 保存 AI 回复建议。
      */
     @PostMapping("/{id}/ai-replies")
@@ -115,8 +164,29 @@ public class TicketController {
             @PathVariable Long id,
             @Valid @RequestBody AiReplyCreateDTO dto) {
 
-        TicketReply reply = ticketReplyService.createAiReply(id, dto);
-        return Result.success("AI 回复建议已保存", reply);
+        throw new BusinessException(400, "保存 AI 回复需要先创建 pending_action 并确认。");
+    }
+
+    /**
+     * 创建保存 AI 回复建议的待确认动作。
+     */
+    @PostMapping("/{id}/ai-replies/pending")
+    public Result<AiPendingConfirmationResponse> createAiReplyPending(
+            @PathVariable Long id,
+            @Valid @RequestBody AiReplyPendingRequest request) {
+
+        return Result.success(aiPendingActionService.createSaveAiReplyPending(id, request));
+    }
+
+    /**
+     * 创建采纳 AI 分类建议的待确认动作。
+     */
+    @PostMapping("/{id}/category/pending")
+    public Result<AiPendingConfirmationResponse> createCategoryPending(
+            @PathVariable Long id,
+            @Valid @RequestBody AiCategoryPendingRequest request) {
+
+        return Result.success(aiPendingActionService.createApplyCategoryPending(id, request));
     }
 
     /**

@@ -77,6 +77,13 @@ class JavaTicketClient:
         data = self._request("GET", "/tickets", auth_token=auth_token, params=params)
         return self._parse_ticket_list(data)
 
+    def list_tickets(
+        self,
+        auth_token: str | None = None,
+        query: dict[str, Any] | None = None,
+    ) -> list[TicketDTO]:
+        return self.search_tickets(auth_token=auth_token, query=query or {})
+
     def get_ticket_by_id(
         self,
         ticket_id: int,

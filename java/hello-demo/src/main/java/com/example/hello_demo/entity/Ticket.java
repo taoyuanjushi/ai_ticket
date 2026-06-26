@@ -30,6 +30,9 @@ public class Ticket {
 
     private String category;
 
+    @TableField("assigned_to")
+    private Long assignedTo;
+
     @TableField("user_id")
     private Long userId;
 
@@ -42,13 +45,14 @@ public class Ticket {
     public Ticket() {
     }
 
-    public Ticket(Long id, String title, String content, String status, String priority, String category, Long userId, LocalDateTime createdAt, LocalDateTime updatedAt) {
+    public Ticket(Long id, String title, String content, String status, String priority, String category, Long assignedTo, Long userId, LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.id = id;
         this.title = title;
         this.content = content;
         this.status = status;
         this.priority = priority;
         this.category = category;
+        this.assignedTo = assignedTo;
         this.userId = userId;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
@@ -100,6 +104,14 @@ public class Ticket {
 
     public void setCategory(String category) {
         this.category = category;
+    }
+
+    public Long getAssignedTo() {
+        return assignedTo;
+    }
+
+    public void setAssignedTo(Long assignedTo) {
+        this.assignedTo = assignedTo;
     }
 
     public Long getUserId() {

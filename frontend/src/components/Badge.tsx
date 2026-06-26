@@ -1,5 +1,6 @@
 import { clsx } from "clsx";
 import type { ReactNode } from "react";
+import { formatPriority, formatTicketStatus, useI18n } from "../i18n";
 import type { TicketPriority, TicketStatus } from "../types/domain";
 
 const statusClasses: Record<TicketStatus, string> = {
@@ -16,11 +17,13 @@ const priorityClasses: Record<TicketPriority, string> = {
 };
 
 export function StatusBadge({ status }: { status: TicketStatus }) {
-  return <Badge className={statusClasses[status]}>{status}</Badge>;
+  const { t } = useI18n();
+  return <Badge className={statusClasses[status]}>{formatTicketStatus(status, t)}</Badge>;
 }
 
 export function PriorityBadge({ priority }: { priority: TicketPriority }) {
-  return <Badge className={priorityClasses[priority]}>{priority}</Badge>;
+  const { t } = useI18n();
+  return <Badge className={priorityClasses[priority]}>{formatPriority(priority, t)}</Badge>;
 }
 
 export function Badge({

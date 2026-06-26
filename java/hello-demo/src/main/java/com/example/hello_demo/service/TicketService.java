@@ -1,8 +1,11 @@
 package com.example.hello_demo.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.hello_demo.common.PageResult;
+import com.example.hello_demo.dto.TicketAssigneeUpdateRequest;
+import com.example.hello_demo.dto.TicketCategoryUpdateRequest;
 import com.example.hello_demo.dto.TicketCreateDTO;
 import com.example.hello_demo.dto.TicketQueryRequest;
 import com.example.hello_demo.dto.TicketUpdateRequest;
@@ -80,6 +83,10 @@ public class TicketService {
         if (request.getCategory() != null) {
             wrapper.eq(Ticket::getCategory, request.getCategory());
         }
+        Long assignedTo = normalizeAssignedToFilter(request.getAssignedTo(), currentUserId);
+        if (assignedTo != null) {
+            wrapper.eq(Ticket::getAssignedTo, assignedTo);
+        }
         String keyword = request.getKeyword();
         if (keyword != null) {
             wrapper.and(keywordWrapper -> keywordWrapper
@@ -124,7 +131,7 @@ public class TicketService {
         ticket.setTitle(dto.getTitle());
         ticket.setContent(dto.getContent());
         ticket.setPriority(dto.getPriority());
-        ticket.setCategory(dto.getCategory());
+        ticket.setCategory(normalizeCategoryForStorage(dto.getCategory()));
         ticket.setUserId(currentUserId);
         validateTicketUser(currentUserId);
 
@@ -136,10 +143,6 @@ public class TicketService {
             validatePriority(priority);
             ticket.setPriority(priority);
         }
-        if (ticket.getCategory() == null || ticket.getCategory().isBlank()) {
-            ticket.setCategory("OTHER");
-        }
-
         ticketMapper.insert(ticket);
         operationLogService.record(
                 OperationType.CREATE_TICKET.name(),
@@ -213,8 +216,8 @@ public class TicketService {
         ticket.setStatus(status);
         ticket.setUpdatedAt(LocalDateTime.now());
 
-        if (request.getCategory() != null && !request.getCategory().isBlank()) {
-            ticket.setCategory(request.getCategory());
+        if (request.getCategory() != null) {
+            ticket.setCategory(normalizeCategoryForStorage(request.getCategory()));
         }
 
         int rows = ticketMapper.updateById(ticket);
@@ -224,6 +227,77 @@ public class TicketService {
 
         ticketCacheService.evictTicketRelated(id);
         return true;
+    }
+
+    /**
+     * 修改工单分类。
+     */
+    public Ticket updateTicketCategory(Long id, TicketCategoryUpdateRequest request) {
+        PermissionUtil.requireStaffOrAdmin();
+        validateId(id);
+        Ticket ticket = getExistingTicket(id);
+
+        String oldCategory = ticket.getCategory();
+        String newCategory = normalizeCategoryForStorage(request == null ? null : request.getCategory());
+
+        LambdaUpdateWrapper<Ticket> wrapper = new LambdaUpdateWrapper<>();
+        wrapper.eq(Ticket::getId, id)
+                .set(Ticket::getCategory, newCategory)
+                .set(Ticket::getUpdatedAt, LocalDateTime.now());
+
+        int rows = ticketMapper.update(null, wrapper);
+        if (rows == 0) {
+            throw new BusinessException(500, "工单分类修改失败");
+        }
+
+        ticketCacheService.evictTicketRelated(id);
+        operationLogService.record(
+                OperationType.TICKET_CATEGORY_UPDATED.name(),
+                BusinessType.TICKET.name(),
+                id,
+                "工单分类从 [" + displayValue(oldCategory, "未分类") + "] 修改为 [" + displayValue(newCategory, "未分类") + "]"
+        );
+
+        return ticketMapper.selectById(id);
+    }
+
+    /**
+     * 分配或取消工单处理人。
+     */
+    public Ticket updateTicketAssignee(Long id, TicketAssigneeUpdateRequest request) {
+        Long currentUserId = PermissionUtil.requireLoginUserId();
+        String currentRole = PermissionUtil.requireLoginRole();
+        if (!UserRole.isStaffOrAdmin(currentRole)) {
+            throw new BusinessException(403, "你没有权限执行该操作。");
+        }
+
+        validateId(id);
+        Ticket ticket = getExistingTicket(id);
+        Long newAssignedTo = request == null ? null : request.getAssignedTo();
+
+        User newAssignee = validateAssigneeForCurrentUser(newAssignedTo, currentUserId, currentRole);
+        String oldAssigneeName = assigneeName(ticket.getAssignedTo());
+        String newAssigneeName = assigneeName(newAssignedTo, newAssignee);
+
+        LambdaUpdateWrapper<Ticket> wrapper = new LambdaUpdateWrapper<>();
+        wrapper.eq(Ticket::getId, id)
+                .set(Ticket::getAssignedTo, newAssignedTo)
+                .set(Ticket::getUpdatedAt, LocalDateTime.now());
+
+        int rows = ticketMapper.update(null, wrapper);
+        if (rows == 0) {
+            throw new BusinessException(500, "工单处理人修改失败");
+        }
+
+        ticketCacheService.evictTicketRelated(id);
+        operationLogService.record(
+                OperationType.TICKET_ASSIGNEE_UPDATED.name(),
+                BusinessType.TICKET.name(),
+                id,
+                "工单处理人从 [" + oldAssigneeName + "] 修改为 [" + newAssigneeName + "]"
+        );
+
+        return ticketMapper.selectById(id);
     }
 
     /**
@@ -313,6 +387,14 @@ public class TicketService {
         }
     }
 
+    private Ticket getExistingTicket(Long id) {
+        Ticket ticket = ticketMapper.selectById(id);
+        if (ticket == null) {
+            throw new BusinessException(404, "目标工单不存在。");
+        }
+        return ticket;
+    }
+
     private void validateId(Long id) {
         if (id == null) {
             throw new BusinessException(400, "工单id不能为空");
@@ -361,7 +443,8 @@ public class TicketService {
     private void normalizeQueryFilters(TicketQueryRequest request) {
         request.setStatus(normalizeOptional(request.getStatus()));
         request.setPriority(normalizeOptional(request.getPriority()));
-        request.setCategory(normalizeOptional(request.getCategory()));
+        request.setCategory(normalizeCategoryForStorage(request.getCategory()));
+        request.setAssignedTo(trimToNull(request.getAssignedTo()));
         request.setKeyword(trimToNull(request.getKeyword()));
 
         if (request.getStatus() != null) {
@@ -369,6 +452,24 @@ public class TicketService {
         }
         if (request.getPriority() != null) {
             validatePriority(request.getPriority());
+        }
+    }
+
+    private Long normalizeAssignedToFilter(String assignedTo, Long currentUserId) {
+        if (assignedTo == null) {
+            return null;
+        }
+        if ("me".equalsIgnoreCase(assignedTo)) {
+            return currentUserId;
+        }
+        try {
+            long value = Long.parseLong(assignedTo);
+            if (value < 1) {
+                throw new BusinessException(400, "assignedTo不能小于1");
+            }
+            return value;
+        } catch (NumberFormatException e) {
+            throw new BusinessException(400, "assignedTo参数格式不正确");
         }
     }
 
@@ -387,7 +488,64 @@ public class TicketService {
         return value.trim();
     }
 
+    private String normalizeCategoryForStorage(String value) {
+        String category = trimToNull(value);
+        if (category == null) {
+            return null;
+        }
+        if (category.length() > 64) {
+            throw new BusinessException(400, "工单分类长度不能超过64");
+        }
+        return category;
+    }
+
     private String normalize(String value) {
         return value.trim().toUpperCase();
+    }
+
+    private User validateAssigneeForCurrentUser(Long assignedTo, Long currentUserId, String currentRole) {
+        if (assignedTo == null) {
+            if (UserRole.isAdmin(currentRole)) {
+                return null;
+            }
+            throw new BusinessException(403, "你没有权限执行该操作。");
+        }
+        if (assignedTo < 1) {
+            throw new BusinessException(400, "assignedTo不能小于1");
+        }
+        if (UserRole.isStaff(currentRole) && !currentUserId.equals(assignedTo)) {
+            throw new BusinessException(403, "你没有权限执行该操作。");
+        }
+
+        User assignee = userMapper.selectById(assignedTo);
+        if (assignee == null) {
+            throw new BusinessException(400, "处理人不存在");
+        }
+        if (!UserRole.isStaffOrAdmin(assignee.getRole())) {
+            throw new BusinessException(400, "处理人必须是 STAFF 或 ADMIN");
+        }
+        return assignee;
+    }
+
+    private String assigneeName(Long userId) {
+        if (userId == null) {
+            return "未分配";
+        }
+        return assigneeName(userId, userMapper.selectById(userId));
+    }
+
+    private String assigneeName(Long userId, User user) {
+        if (userId == null) {
+            return "未分配";
+        }
+        if (user == null) {
+            return "用户#" + userId;
+        }
+        return displayValue(user.getName(), displayValue(user.getUsername(), "用户#" + userId));
+    }
+
+    private String displayValue(String value, String fallback) {
+        String trimmed = trimToNull(value);
+        return trimmed == null ? fallback : trimmed;
     }
 }

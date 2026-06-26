@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.api import agent_api
 from app.main import app
+from app.schemas.pending_action import AiPendingActionType
 from app.tools.mock_ticket_data import MOCK_TICKETS, reset_mock_tickets
 from app.tools.ticket_tools import create_ticket, search_tickets
 from app.tools.tool_registry import get_all_tools
@@ -102,10 +103,17 @@ def test_agent_chat_complete_create_request_creates_ticket() -> None:
     )
 
     assert response.status_code == 200
-    answer = response.json()["answer"]
-    assert "请确认：是否创建以下工单" in answer
-    assert "标题：登录失败" in answer
-    assert "优先级：HIGH" in answer
+    body = response.json()
+    assert body["type"] == "PENDING_CONFIRMATION"
+    assert body["answer"] == "请确认是否创建该工单。"
+    assert body["data"] == {
+        "actionType": AiPendingActionType.CREATE_TICKET.value,
+        "payload": {
+            "title": "登录失败",
+            "description": "用户输入正确密码后仍提示错误",
+            "priority": "HIGH",
+        },
+    }
     assert len(MOCK_TICKETS) == 5
 
     confirm_response = client.post("/agent/chat", json={"message": "确认", "auth_token": "A_TOKEN"})
@@ -193,7 +201,7 @@ def test_agent_chat_high_priority_text_maps_to_high() -> None:
     )
 
     assert response.status_code == 200
-    assert "优先级：HIGH" in response.json()["answer"]
+    assert response.json()["data"]["payload"]["priority"] == "HIGH"
 
 
 def test_agent_chat_urgent_text_maps_to_urgent() -> None:
@@ -209,7 +217,7 @@ def test_agent_chat_urgent_text_maps_to_urgent() -> None:
     )
 
     assert response.status_code == 200
-    assert "优先级：URGENT" in response.json()["answer"]
+    assert response.json()["data"]["payload"]["priority"] == "URGENT"
 
 
 def test_agent_chat_invalid_priority_returns_friendly_message() -> None:

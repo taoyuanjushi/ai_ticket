@@ -11,7 +11,7 @@ from app.core.exceptions import AppException, JAVA_API_ERROR, LLM_CALL_FAILED
 from app.main import app
 from app.prompts.reply_suggestion_prompt import build_reply_suggestion_prompt
 from app.schemas.ticket import TicketDTO, TicketDetailDTO
-from app.services.ticket_ai_service import REPLY_SUGGESTION_FAILED_MESSAGE
+from app.services.ticket_ai_service import LLM_JSON_PARSE_FAILED_MESSAGE
 from app.services.ticket_ai_service import TicketAiService
 from tests.conftest import FakeJavaTicketClient
 
@@ -75,7 +75,8 @@ def test_prompt_builder_uses_ticket_detail_and_ignores_password() -> None:
     assert "只生成回复建议" in prompt
     assert "必须输出合法 JSON" in prompt
     assert "你只能使用 ticket_detail 中的信息。" in prompt
-    assert "不能假设系统日志、报错码、处理结果" in prompt
+    assert "不能假设系统日志、监控数据、错误码、根因、处理结果" in prompt
+    assert "SLA 截止时间" in prompt
     assert "不能编造 ticket_detail 中不存在的信息" in prompt
     assert '"suggestion": "..."' in prompt
 
@@ -152,7 +153,8 @@ def test_ticket_ai_service_returns_readable_error_when_json_repair_fails() -> No
         service.generate_reply_suggestion_by_ticket_id(1, auth_token="java-token")
 
     assert exc_info.value.code == LLM_CALL_FAILED
-    assert exc_info.value.message == REPLY_SUGGESTION_FAILED_MESSAGE
+    assert exc_info.value.message == LLM_JSON_PARSE_FAILED_MESSAGE
+    assert exc_info.value.detail == {"risk_flags": ["JSON解析失败"]}
 
 
 def test_ticket_ai_service_marks_insufficient_information_without_fabricating() -> None:

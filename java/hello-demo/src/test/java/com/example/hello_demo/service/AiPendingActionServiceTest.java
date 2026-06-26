@@ -2,8 +2,12 @@ package com.example.hello_demo.service;
 
 import com.example.hello_demo.dto.AiPendingActionConfirmResponse;
 import com.example.hello_demo.dto.AiPendingActionCreateRequest;
+import com.example.hello_demo.dto.AiPendingConfirmationResponse;
 import com.example.hello_demo.dto.AiPendingActionResponse;
+import com.example.hello_demo.dto.AiCategoryPendingRequest;
 import com.example.hello_demo.dto.AiReplyCreateDTO;
+import com.example.hello_demo.dto.AiReplyPendingRequest;
+import com.example.hello_demo.dto.TicketCategoryUpdateRequest;
 import com.example.hello_demo.dto.TicketCreateDTO;
 import com.example.hello_demo.entity.AiPendingAction;
 import com.example.hello_demo.entity.Ticket;
@@ -25,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -166,6 +171,29 @@ class AiPendingActionServiceTest {
     }
 
     @Test
+    void confirmDoesNotExecuteWhenAtomicStatusUpdateFails() {
+        when(aiPendingActionMapper.selectOne(any())).thenReturn(
+                pendingAction(141L, 7L, "chat-race", AiPendingActionType.CREATE_TICKET, createTicketPayload())
+        );
+        when(aiPendingActionMapper.update(any(AiPendingAction.class), any())).thenReturn(0);
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> aiPendingActionService.confirmPendingAction("chat-race")
+        );
+
+        assertEquals(400, exception.getCode());
+        assertEquals("当前没有待确认的操作，请重新发起请求。", exception.getMessage());
+        verify(ticketService, never()).createTicket(any(TicketCreateDTO.class));
+        verify(operationLogService, never()).record(
+                eq(OperationType.AI_WRITE_CONFIRMED.name()),
+                eq(BusinessType.AI_PENDING_ACTION.name()),
+                eq(141L),
+                any()
+        );
+    }
+
+    @Test
     void otherUserCannotConfirmPendingAction() {
         when(aiPendingActionMapper.selectOne(any())).thenReturn(null);
 
@@ -283,6 +311,113 @@ class AiPendingActionServiceTest {
     }
 
     @Test
+    void staffCreatesSaveAiReplyPendingAction() {
+        when(ticketService.getTicketById(1L)).thenReturn(ticket(1L, "OPEN"));
+        when(aiPendingActionMapper.insert(any(AiPendingAction.class))).thenAnswer(invocation -> {
+            AiPendingAction action = invocation.getArgument(0);
+            action.setId(40L);
+            return 1;
+        });
+        AiReplyPendingRequest request = new AiReplyPendingRequest();
+        request.setConversationId("chat-ai-reply");
+        request.setContent("建议先补充错误截图。");
+
+        AiPendingConfirmationResponse response = aiPendingActionService.createSaveAiReplyPending(1L, request);
+
+        assertEquals("PENDING_CONFIRMATION", response.getType());
+        assertEquals("请确认是否保存这条 AI 回复。", response.getMessage());
+        assertEquals(AiPendingActionType.SAVE_AI_REPLY.name(), response.getData().get("actionType"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) response.getData().get("payload");
+        assertEquals("建议先补充错误截图。", payload.get("content"));
+        assertFalse(payload.containsKey("token"));
+        verify(operationLogService).record(
+                eq(OperationType.AI_REPLY_SAVE_PENDING_CREATED.name()),
+                eq(BusinessType.AI_PENDING_ACTION.name()),
+                eq(40L),
+                contains("工单ID=1")
+        );
+    }
+
+    @Test
+    void normalUserCannotCreateSaveAiReplyPendingAction() {
+        CurrentUserContext.set(1L, "tom", "USER");
+        AiReplyPendingRequest request = new AiReplyPendingRequest();
+        request.setConversationId("chat-ai-reply-user");
+        request.setContent("AI reply");
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> aiPendingActionService.createSaveAiReplyPending(1L, request)
+        );
+
+        assertEquals(403, exception.getCode());
+        verify(aiPendingActionMapper, never()).insert(any(AiPendingAction.class));
+        verify(ticketReplyService, never()).createAiReply(any(), any());
+    }
+
+    @Test
+    void saveAiReplyPendingRejectsTooLongContent() {
+        AiReplyPendingRequest request = new AiReplyPendingRequest();
+        request.setConversationId("chat-ai-reply-long");
+        request.setContent("x".repeat(2001));
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> aiPendingActionService.createSaveAiReplyPending(1L, request)
+        );
+
+        assertEquals(400, exception.getCode());
+        verify(aiPendingActionMapper, never()).insert(any(AiPendingAction.class));
+    }
+
+    @Test
+    void staffCreatesApplyCategoryPendingAction() {
+        when(ticketService.getTicketById(1L)).thenReturn(ticket(1L, "OPEN"));
+        when(aiPendingActionMapper.insert(any(AiPendingAction.class))).thenAnswer(invocation -> {
+            AiPendingAction action = invocation.getArgument(0);
+            action.setId(41L);
+            return 1;
+        });
+        AiCategoryPendingRequest request = new AiCategoryPendingRequest();
+        request.setConversationId("chat-category");
+        request.setCategory("账号登录");
+        request.setConfidence(0.82);
+        request.setReason("标题和描述均提到登录失败");
+
+        AiPendingConfirmationResponse response = aiPendingActionService.createApplyCategoryPending(1L, request);
+
+        assertEquals("PENDING_CONFIRMATION", response.getType());
+        assertEquals(AiPendingActionType.APPLY_AI_CATEGORY.name(), response.getData().get("actionType"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) response.getData().get("payload");
+        assertEquals("账号登录", payload.get("category"));
+        assertEquals(0.82, payload.get("confidence"));
+        verify(operationLogService).record(
+                eq(OperationType.AI_CATEGORY_APPLY_PENDING_CREATED.name()),
+                eq(BusinessType.AI_PENDING_ACTION.name()),
+                eq(41L),
+                contains("分类=账号登录")
+        );
+    }
+
+    @Test
+    void normalUserCannotCreateApplyCategoryPendingAction() {
+        CurrentUserContext.set(1L, "tom", "USER");
+        AiCategoryPendingRequest request = new AiCategoryPendingRequest();
+        request.setConversationId("chat-category-user");
+        request.setCategory("账号登录");
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> aiPendingActionService.createApplyCategoryPending(1L, request)
+        );
+
+        assertEquals(403, exception.getCode());
+        verify(aiPendingActionMapper, never()).insert(any(AiPendingAction.class));
+    }
+
+    @Test
     void confirmSaveAiReplyExecutesThroughTicketReplyService() {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("ticketId", 1L);
@@ -317,6 +452,64 @@ class AiPendingActionServiceTest {
                 eq(BusinessType.AI_PENDING_ACTION.name()),
                 eq(15L),
                 contains("riskFlags=信息不足,需要人工确认")
+        );
+    }
+
+    @Test
+    void confirmApplyCategoryExecutesThroughTicketServiceAndWritesAiLog() {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("ticketId", 1L);
+        payload.put("category", "账号登录");
+        payload.put("confidence", 0.82);
+        payload.put("reason", "标题和描述均提到登录失败");
+        Ticket before = ticket(1L, "OPEN");
+        before.setCategory("OTHER");
+        Ticket after = ticket(1L, "OPEN");
+        after.setCategory("账号登录");
+        when(aiPendingActionMapper.selectOne(any())).thenReturn(
+                pendingAction(42L, 7L, "chat-category-confirm", AiPendingActionType.APPLY_AI_CATEGORY, payload)
+        );
+        when(aiPendingActionMapper.update(any(AiPendingAction.class), any())).thenReturn(1);
+        when(ticketService.getTicketById(1L)).thenReturn(before);
+        when(ticketService.updateTicketCategory(eq(1L), any(TicketCategoryUpdateRequest.class))).thenReturn(after);
+
+        AiPendingActionConfirmResponse response = aiPendingActionService.confirmPendingAction("chat-category-confirm");
+
+        assertEquals(AiPendingActionStatus.CONFIRMED.name(), response.getPendingAction().getStatus());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) response.getResult();
+        assertEquals("OTHER", result.get("oldCategory"));
+        assertEquals("账号登录", result.get("newCategory"));
+        ArgumentCaptor<TicketCategoryUpdateRequest> captor = ArgumentCaptor.forClass(TicketCategoryUpdateRequest.class);
+        verify(ticketService).updateTicketCategory(eq(1L), captor.capture());
+        assertEquals("账号登录", captor.getValue().getCategory());
+        verify(operationLogService).record(
+                eq(OperationType.AI_CATEGORY_APPLIED.name()),
+                eq(BusinessType.TICKET.name()),
+                eq(1L),
+                contains("新分类=账号登录")
+        );
+    }
+
+    @Test
+    void cancelApplyCategoryDoesNotUpdateTicketCategory() {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("ticketId", 1L);
+        payload.put("category", "账号登录");
+        when(aiPendingActionMapper.selectOne(any())).thenReturn(
+                pendingAction(43L, 7L, "chat-category-cancel", AiPendingActionType.APPLY_AI_CATEGORY, payload)
+        );
+        when(aiPendingActionMapper.update(any(AiPendingAction.class), any())).thenReturn(1);
+
+        AiPendingActionResponse response = aiPendingActionService.cancelPendingAction("chat-category-cancel");
+
+        assertEquals(AiPendingActionStatus.CANCELLED.name(), response.getStatus());
+        verify(ticketService, never()).updateTicketCategory(any(), any());
+        verify(operationLogService).record(
+                eq(OperationType.AI_ACTION_CANCELLED.name()),
+                eq(BusinessType.AI_PENDING_ACTION.name()),
+                eq(43L),
+                contains(AiPendingActionType.APPLY_AI_CATEGORY.name())
         );
     }
 

@@ -1,4 +1,3 @@
-import re
 from collections.abc import Callable
 
 from app.clients.java_ticket_client import JavaApiError, JavaTicketClient
@@ -28,11 +27,13 @@ from app.services.ai_capabilities import (
     TicketSummaryService,
 )
 from app.services.grounding import TicketGroundingService
+from app.services.llm_json_parser import LLMJsonParseError, parse_llm_json
 from pydantic import ValidationError
 
 logger = get_logger(__name__)
 
 REPLY_SUGGESTION_FAILED_MESSAGE = "AI 回复建议生成失败，请稍后重试或手动填写。"
+LLM_JSON_PARSE_FAILED_MESSAGE = "AI 返回格式异常，请稍后重试。"
 
 
 class TicketAiService:
@@ -192,36 +193,26 @@ class TicketAiService:
                 code=JAVA_API_ERROR,
                 message=exc.message,
                 status_code=exc.status_code,
+                detail={
+                    "risk_flags": self.grounding_service.java_error_risk_flags(
+                        exc.status_code
+                    )
+                },
             ) from exc
 
     def _parse_llm_result(self, content: str) -> ReplySuggestionResult:
         try:
-            return ReplySuggestionResult.model_validate_json(content)
-        except (ValidationError, ValueError):
-            repaired_content = self._repair_json_content(content)
-
-        if repaired_content != content:
-            try:
-                return ReplySuggestionResult.model_validate_json(repaired_content)
-            except (ValidationError, ValueError) as exc:
-                logger.warning("Reply suggestion JSON repair failed: %s", exc)
+            payload = parse_llm_json(content)
+            return ReplySuggestionResult.model_validate(payload)
+        except (LLMJsonParseError, ValidationError, ValueError) as exc:
+            logger.warning("Reply suggestion JSON parse failed: %s", exc)
 
         raise AppException(
             code=LLM_CALL_FAILED,
-            message=REPLY_SUGGESTION_FAILED_MESSAGE,
+            message=LLM_JSON_PARSE_FAILED_MESSAGE,
             status_code=502,
+            detail={"risk_flags": ["JSON解析失败"]},
         )
-
-    def _repair_json_content(self, content: str) -> str:
-        text = content.strip()
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s*```$", "", text)
-
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end > start:
-            return text[start : end + 1].strip()
-        return text
 
     def _apply_ticket_detail_risk_controls(
         self,

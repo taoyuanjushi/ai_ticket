@@ -2,6 +2,7 @@ package com.example.hello_demo.dto;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 
 /**
  * 修改工单请求对象。
@@ -22,6 +23,7 @@ public class TicketUpdateRequest {
     @NotBlank(message = "工单状态不能为空")
     private String status;
 
+    @Size(max = 64, message = "工单分类长度不能超过64")
     private String category;
 
     public TicketUpdateRequest() {

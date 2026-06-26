@@ -58,12 +58,18 @@ class PrioritySuggestionService(TicketAiCapabilityBase):
         ticket_detail: TicketDetailDTO,
     ) -> PrioritySuggestionResult:
         risk_flags = self.base_risk_flags(ticket_detail)
-        return self._suggest_from_text(
+        result = self._suggest_from_text(
             title=ticket_detail.title,
             description=ticket_detail.description or "",
             current_priority=ticket_detail.priority.value if ticket_detail.priority else None,
             risk_flags=risk_flags,
         )
+        result.risk_flags = self.grounding_service.add_unsupported_conclusion_flag(
+            output_text=result.reason,
+            ticket_detail=ticket_detail,
+            risk_flags=result.risk_flags,
+        )
+        return result
 
     def suggest_from_text(
         self,

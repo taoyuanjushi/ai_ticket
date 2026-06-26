@@ -1,7 +1,11 @@
 package com.example.hello_demo.service;
 
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.hello_demo.dto.TicketAssigneeUpdateRequest;
+import com.example.hello_demo.dto.TicketCategoryUpdateRequest;
 import com.example.hello_demo.entity.Ticket;
 import com.example.hello_demo.entity.User;
+import com.example.hello_demo.enums.OperationType;
 import com.example.hello_demo.enums.TicketStatus;
 import com.example.hello_demo.dto.TicketCreateDTO;
 import com.example.hello_demo.exception.BusinessException;
@@ -24,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -219,12 +224,299 @@ class TicketServiceCacheSecurityTest {
         );
     }
 
+    @Test
+    void ticketDetailReturnsCategoryAndAssignedTo() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        UserMapper userMapper = mock(UserMapper.class);
+        TicketReplyMapper ticketReplyMapper = mock(TicketReplyMapper.class);
+        TicketCacheService ticketCacheService = mock(TicketCacheService.class);
+        Ticket ticket = ticket(1L, 7L);
+        ticket.setCategory("账号登录");
+        ticket.setAssignedTo(2L);
+        when(ticketMapper.selectById(1L)).thenReturn(ticket);
+        when(userMapper.selectById(7L)).thenReturn(user(7L));
+        TicketService ticketService = new TicketService(
+                ticketMapper,
+                userMapper,
+                ticketReplyMapper,
+                mock(OperationLogService.class),
+                ticketCacheService,
+                new TicketStatusTransitionPolicy()
+        );
+        CurrentUserContext.set(3L, "staff", "STAFF");
+
+        TicketDetailVO result = ticketService.getTicketDetail(1L);
+
+        assertEquals("账号登录", result.getTicket().getCategory());
+        assertEquals(2L, result.getTicket().getAssignedTo());
+    }
+
+    @Test
+    void ticketListReturnsCategoryAndAssignedTo() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        TicketCacheService ticketCacheService = mock(TicketCacheService.class);
+        Ticket ticket = ticket(1L, 7L);
+        ticket.setCategory("账号登录");
+        ticket.setAssignedTo(2L);
+        Page<Ticket> page = new Page<>(1, 10);
+        page.setRecords(List.of(ticket));
+        page.setTotal(1);
+        when(ticketMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        TicketService ticketService = ticketService(ticketMapper, ticketCacheService);
+        CurrentUserContext.set(3L, "staff", "STAFF");
+
+        List<Ticket> records = ticketService.getTickets(null).getRecords();
+
+        assertEquals("账号登录", records.get(0).getCategory());
+        assertEquals(2L, records.get(0).getAssignedTo());
+    }
+
+    @Test
+    void staffCanUpdateCategoryAndEvictCacheAndWriteLog() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        TicketCacheService ticketCacheService = mock(TicketCacheService.class);
+        OperationLogService operationLogService = mock(OperationLogService.class);
+        Ticket existing = ticket(1L, 7L);
+        existing.setCategory("旧分类");
+        Ticket updated = ticket(1L, 7L);
+        updated.setCategory("账号登录");
+        when(ticketMapper.selectById(1L)).thenReturn(existing, updated);
+        when(ticketMapper.update(isNull(), any())).thenReturn(1);
+        TicketService ticketService = ticketService(ticketMapper, mock(UserMapper.class), operationLogService, ticketCacheService);
+        CurrentUserContext.set(3L, "staff", "STAFF");
+        TicketCategoryUpdateRequest request = new TicketCategoryUpdateRequest();
+        request.setCategory("账号登录");
+
+        Ticket result = ticketService.updateTicketCategory(1L, request);
+
+        assertEquals("账号登录", result.getCategory());
+        verify(ticketMapper).update(isNull(), any());
+        verify(ticketCacheService).evictTicketRelated(1L);
+        verify(operationLogService).record(
+                eq(OperationType.TICKET_CATEGORY_UPDATED.name()),
+                eq("TICKET"),
+                eq(1L),
+                eq("工单分类从 [旧分类] 修改为 [账号登录]")
+        );
+    }
+
+    @Test
+    void adminCanClearCategory() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        Ticket existing = ticket(1L, 7L);
+        existing.setCategory("旧分类");
+        Ticket updated = ticket(1L, 7L);
+        updated.setCategory(null);
+        when(ticketMapper.selectById(1L)).thenReturn(existing, updated);
+        when(ticketMapper.update(isNull(), any())).thenReturn(1);
+        TicketService ticketService = ticketService(ticketMapper, mock(UserMapper.class), mock(OperationLogService.class), mock(TicketCacheService.class));
+        CurrentUserContext.set(9L, "admin", "ADMIN");
+
+        Ticket result = ticketService.updateTicketCategory(1L, new TicketCategoryUpdateRequest());
+
+        assertEquals(null, result.getCategory());
+    }
+
+    @Test
+    void normalUserCannotUpdateCategory() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        TicketService ticketService = ticketService(ticketMapper, mock(TicketCacheService.class));
+        CurrentUserContext.set(1L, "tom", "USER");
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> ticketService.updateTicketCategory(1L, new TicketCategoryUpdateRequest())
+        );
+
+        assertEquals(403, exception.getCode());
+        verify(ticketMapper, never()).selectById(anyLong());
+    }
+
+    @Test
+    void updateCategoryForMissingTicketReturns404() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        when(ticketMapper.selectById(99L)).thenReturn(null);
+        TicketService ticketService = ticketService(ticketMapper, mock(TicketCacheService.class));
+        CurrentUserContext.set(3L, "staff", "STAFF");
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> ticketService.updateTicketCategory(99L, new TicketCategoryUpdateRequest())
+        );
+
+        assertEquals(404, exception.getCode());
+    }
+
+    @Test
+    void updateCategoryRejectsTooLongValue() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        when(ticketMapper.selectById(1L)).thenReturn(ticket(1L, 7L));
+        TicketService ticketService = ticketService(ticketMapper, mock(TicketCacheService.class));
+        CurrentUserContext.set(3L, "staff", "STAFF");
+        TicketCategoryUpdateRequest request = new TicketCategoryUpdateRequest();
+        request.setCategory("x".repeat(65));
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> ticketService.updateTicketCategory(1L, request)
+        );
+
+        assertEquals(400, exception.getCode());
+    }
+
+    @Test
+    void adminCanAssignTicketToStaffAndWriteLog() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        UserMapper userMapper = mock(UserMapper.class);
+        TicketCacheService ticketCacheService = mock(TicketCacheService.class);
+        OperationLogService operationLogService = mock(OperationLogService.class);
+        Ticket existing = ticket(1L, 7L);
+        Ticket updated = ticket(1L, 7L);
+        updated.setAssignedTo(3L);
+        when(ticketMapper.selectById(1L)).thenReturn(existing, updated);
+        when(ticketMapper.update(isNull(), any())).thenReturn(1);
+        when(userMapper.selectById(3L)).thenReturn(user(3L, "STAFF"));
+        TicketService ticketService = ticketService(ticketMapper, userMapper, operationLogService, ticketCacheService);
+        CurrentUserContext.set(9L, "admin", "ADMIN");
+        TicketAssigneeUpdateRequest request = new TicketAssigneeUpdateRequest();
+        request.setAssignedTo(3L);
+
+        Ticket result = ticketService.updateTicketAssignee(1L, request);
+
+        assertEquals(3L, result.getAssignedTo());
+        verify(ticketCacheService).evictTicketRelated(1L);
+        verify(operationLogService).record(
+                eq(OperationType.TICKET_ASSIGNEE_UPDATED.name()),
+                eq("TICKET"),
+                eq(1L),
+                eq("工单处理人从 [未分配] 修改为 [user-3]")
+        );
+    }
+
+    @Test
+    void adminCanClearAssignee() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        UserMapper userMapper = mock(UserMapper.class);
+        Ticket existing = ticket(1L, 7L);
+        existing.setAssignedTo(3L);
+        Ticket updated = ticket(1L, 7L);
+        updated.setAssignedTo(null);
+        when(ticketMapper.selectById(1L)).thenReturn(existing, updated);
+        when(ticketMapper.update(isNull(), any())).thenReturn(1);
+        when(userMapper.selectById(3L)).thenReturn(user(3L, "STAFF"));
+        TicketService ticketService = ticketService(ticketMapper, userMapper, mock(OperationLogService.class), mock(TicketCacheService.class));
+        CurrentUserContext.set(9L, "admin", "ADMIN");
+
+        Ticket result = ticketService.updateTicketAssignee(1L, new TicketAssigneeUpdateRequest());
+
+        assertEquals(null, result.getAssignedTo());
+    }
+
+    @Test
+    void staffCanAssignTicketToSelf() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        UserMapper userMapper = mock(UserMapper.class);
+        Ticket updated = ticket(1L, 7L);
+        updated.setAssignedTo(3L);
+        when(ticketMapper.selectById(1L)).thenReturn(ticket(1L, 7L), updated);
+        when(ticketMapper.update(isNull(), any())).thenReturn(1);
+        when(userMapper.selectById(3L)).thenReturn(user(3L, "STAFF"));
+        TicketService ticketService = ticketService(ticketMapper, userMapper, mock(OperationLogService.class), mock(TicketCacheService.class));
+        CurrentUserContext.set(3L, "staff", "STAFF");
+        TicketAssigneeUpdateRequest request = new TicketAssigneeUpdateRequest();
+        request.setAssignedTo(3L);
+
+        Ticket result = ticketService.updateTicketAssignee(1L, request);
+
+        assertEquals(3L, result.getAssignedTo());
+    }
+
+    @Test
+    void staffCannotAssignTicketToOtherUser() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        when(ticketMapper.selectById(1L)).thenReturn(ticket(1L, 7L));
+        TicketService ticketService = ticketService(ticketMapper, mock(UserMapper.class), mock(OperationLogService.class), mock(TicketCacheService.class));
+        CurrentUserContext.set(3L, "staff", "STAFF");
+        TicketAssigneeUpdateRequest request = new TicketAssigneeUpdateRequest();
+        request.setAssignedTo(4L);
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> ticketService.updateTicketAssignee(1L, request)
+        );
+
+        assertEquals(403, exception.getCode());
+        verify(ticketMapper, never()).update(isNull(), any());
+    }
+
+    @Test
+    void normalUserCannotAssignTicket() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        TicketService ticketService = ticketService(ticketMapper, mock(TicketCacheService.class));
+        CurrentUserContext.set(1L, "tom", "USER");
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> ticketService.updateTicketAssignee(1L, new TicketAssigneeUpdateRequest())
+        );
+
+        assertEquals(403, exception.getCode());
+        verify(ticketMapper, never()).selectById(anyLong());
+    }
+
+    @Test
+    void assigningMissingUserReturns400() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        UserMapper userMapper = mock(UserMapper.class);
+        when(ticketMapper.selectById(1L)).thenReturn(ticket(1L, 7L));
+        when(userMapper.selectById(99L)).thenReturn(null);
+        TicketService ticketService = ticketService(ticketMapper, userMapper, mock(OperationLogService.class), mock(TicketCacheService.class));
+        CurrentUserContext.set(9L, "admin", "ADMIN");
+        TicketAssigneeUpdateRequest request = new TicketAssigneeUpdateRequest();
+        request.setAssignedTo(99L);
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> ticketService.updateTicketAssignee(1L, request)
+        );
+
+        assertEquals(400, exception.getCode());
+    }
+
+    @Test
+    void assigningNormalUserReturns400() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        UserMapper userMapper = mock(UserMapper.class);
+        when(ticketMapper.selectById(1L)).thenReturn(ticket(1L, 7L));
+        when(userMapper.selectById(2L)).thenReturn(user(2L, "USER"));
+        TicketService ticketService = ticketService(ticketMapper, userMapper, mock(OperationLogService.class), mock(TicketCacheService.class));
+        CurrentUserContext.set(9L, "admin", "ADMIN");
+        TicketAssigneeUpdateRequest request = new TicketAssigneeUpdateRequest();
+        request.setAssignedTo(2L);
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> ticketService.updateTicketAssignee(1L, request)
+        );
+
+        assertEquals(400, exception.getCode());
+    }
+
     private TicketService ticketService(TicketMapper ticketMapper, TicketCacheService ticketCacheService) {
-        return new TicketService(
+        return ticketService(
                 ticketMapper,
                 mock(UserMapper.class),
-                mock(TicketReplyMapper.class),
                 mock(OperationLogService.class),
+                ticketCacheService
+        );
+    }
+
+    private TicketService ticketService(TicketMapper ticketMapper, UserMapper userMapper, OperationLogService operationLogService, TicketCacheService ticketCacheService) {
+        return new TicketService(
+                ticketMapper,
+                userMapper,
+                mock(TicketReplyMapper.class),
+                operationLogService,
                 ticketCacheService,
                 new TicketStatusTransitionPolicy()
         );
@@ -243,10 +535,15 @@ class TicketServiceCacheSecurityTest {
     }
 
     private User user(Long id) {
+        return user(id, "USER");
+    }
+
+    private User user(Long id, String role) {
         User user = new User();
         user.setId(id);
         user.setUsername("user-" + id);
-        user.setRole("USER");
+        user.setName("user-" + id);
+        user.setRole(role);
         return user;
     }
 }

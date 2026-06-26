@@ -4,8 +4,10 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 from app.clients.java_ticket_client import JavaApiError, JavaTicketClient
-from app.core.exceptions import AppException, TOOL_CALL_FAILED
+from app.core.exceptions import AppException, LLM_CALL_FAILED, LLM_CONFIG_MISSING, TOOL_CALL_FAILED
 from app.core.logger import get_logger
+from app.schemas.agent_response import AgentResponse
+from app.schemas.agent_schema import AgentChatRequest
 from app.schemas.agent_state_schema import PendingAction
 from app.schemas.intent_schema import IntentResult, IntentType
 from app.schemas.pending_action import (
@@ -14,10 +16,16 @@ from app.schemas.pending_action import (
     AiPendingActionType,
     CreateAiPendingActionRequest,
 )
+from app.schemas.pending_intent import PendingIntent
 from app.services.agent_state_service import AgentStateService
 from app.services.intent_recognizer import IntentRecognizer
 from app.services.llm_service import LLMService
 from app.services.pending_action_store import DEFAULT_SESSION_KEY
+from app.services.pending_intent_store import (
+    InMemoryPendingIntentStoreForDev,
+    build_pending_intent_key,
+)
+from app.services.response_builder import ResponseBuilder
 from app.services.ticket_ai_service import TicketAiService
 from app.tools.capability_tools import get_agent_capabilities
 from app.tools.ticket_tools import create_ticket, search_tickets, update_ticket_status
@@ -55,6 +63,14 @@ GROUNDED_TICKET_AI_LABELS = {
     IntentType.SLA_RISK_CHECK: "SLA 风险提醒",
 }
 
+GROUNDED_TICKET_AI_RESULT_MESSAGES = {
+    IntentType.TICKET_SUMMARY: "工单摘要生成完成",
+    IntentType.PRIORITY_SUGGESTION: "优先级建议生成完成",
+    IntentType.CATEGORY_SUGGESTION: "分类建议生成完成",
+    IntentType.SIMILAR_TICKET_SEARCH: "相似工单检索完成",
+    IntentType.SLA_RISK_CHECK: "SLA 风险分析完成",
+}
+
 
 class AgentToolService:
     def __init__(
@@ -64,6 +80,7 @@ class AgentToolService:
         intent_recognizer: IntentRecognizer | None = None,
         ticket_ai_service: TicketAiService | None = None,
         java_ticket_client: JavaTicketClient | None = None,
+        pending_intent_store: InMemoryPendingIntentStoreForDev | None = None,
         capability_tool: BaseTool = get_agent_capabilities,
         search_ticket_tool: BaseTool = search_tickets,
         create_ticket_tool: BaseTool = create_ticket,
@@ -76,10 +93,26 @@ class AgentToolService:
         self.intent_recognizer = intent_recognizer or IntentRecognizer()
         self.ticket_ai_service = ticket_ai_service or TicketAiService()
         self.java_ticket_client = java_ticket_client or JavaTicketClient()
+        self.pending_intent_store = pending_intent_store or InMemoryPendingIntentStoreForDev()
         self.capability_tool = capability_tool
         self.search_ticket_tool = search_ticket_tool
         self.create_ticket_tool = create_ticket_tool
         self.update_ticket_status_tool = update_ticket_status_tool
+
+    async def handle(self, request: AgentChatRequest) -> AgentResponse:
+        """Main typed entrypoint used by /agent/chat.
+
+        The older chat_with_tools method is kept for compatibility with direct
+        tests and local scripts. This wrapper keeps the API layer thin and
+        returns the internal AgentResponse contract instead of a JSON string.
+        """
+        raw_response = await self.chat_with_tools(
+            request.message,
+            auth_token=request.auth_token,
+            user_id=request.user_id,
+            conversation_id=request.conversation_id,
+        )
+        return self._to_agent_response(raw_response)
 
     async def chat_with_tools(
         self,
@@ -92,7 +125,17 @@ class AgentToolService:
             user_id=user_id,
             conversation_id=conversation_id,
         )
+        resolved_user_id = self._resolve_user_id(user_id)
+        pending_intent_key = build_pending_intent_key(
+            resolved_user_id,
+            resolved_conversation_id,
+        )
         intent_result = self.intent_recognizer.recognize(message)
+        intent_result = self._merge_pending_intent_if_needed(
+            key=pending_intent_key,
+            message=message,
+            intent_result=intent_result,
+        )
         logger.info(
             "Agent intent recognized: intent=%s confidence=%s missing_fields=%s",
             intent_result.intent,
@@ -100,19 +143,24 @@ class AgentToolService:
             intent_result.missing_fields,
         )
 
-        return self._dispatch_intent(
+        result = self._dispatch_intent(
             message=message,
             intent_result=intent_result,
             auth_token=auth_token,
+            user_id=resolved_user_id,
             conversation_id=resolved_conversation_id,
+            pending_intent_key=pending_intent_key,
         )
+        return self._ensure_structured_response(result)
 
     def _dispatch_intent(
         self,
         message: str,
         intent_result: IntentResult,
         auth_token: str | None,
+        user_id: str,
         conversation_id: str,
+        pending_intent_key: str,
     ) -> str:
         # Confirmation commands are handled before every other branch so a
         # plain "确认" or "取消" cannot be mistaken for a new business request.
@@ -123,10 +171,15 @@ class AgentToolService:
             )
 
         if intent_result.intent == IntentType.CANCEL:
-            return self.handle_pending_action_cancellation(
+            had_pending_intent = self.pending_intent_store.get(pending_intent_key) is not None
+            self.pending_intent_store.delete(pending_intent_key)
+            cancellation_result = self.handle_pending_action_cancellation(
                 conversation_id=conversation_id,
                 auth_token=auth_token,
             )
+            if had_pending_intent or "没有待取消" in cancellation_result or "已取消" in cancellation_result:
+                return self._format_normal_response("已取消当前待补充或待确认的操作。")
+            return cancellation_result
 
         # Read-only branches can execute immediately because Java still enforces
         # ticket visibility and permission checks.
@@ -143,6 +196,8 @@ class AgentToolService:
                 intent_result=intent_result,
                 conversation_id=conversation_id,
                 auth_token=auth_token,
+                user_id=user_id,
+                pending_intent_key=pending_intent_key,
             )
 
         if intent_result.intent == IntentType.UPDATE_TICKET_STATUS:
@@ -150,12 +205,17 @@ class AgentToolService:
                 intent_result=intent_result,
                 conversation_id=conversation_id,
                 auth_token=auth_token,
+                user_id=user_id,
+                pending_intent_key=pending_intent_key,
             )
 
         if intent_result.intent == IntentType.REPLY_SUGGESTION:
             return self._handle_reply_suggestion_intent(
                 intent_result=intent_result,
                 auth_token=auth_token,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                pending_intent_key=pending_intent_key,
             )
 
         if intent_result.intent == IntentType.SAVE_AI_REPLY:
@@ -169,6 +229,9 @@ class AgentToolService:
             return self._handle_grounded_ticket_ai_intent(
                 intent_result=intent_result,
                 auth_token=auth_token,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                pending_intent_key=pending_intent_key,
             )
 
         if self.should_call_capability_tool(message):
@@ -187,10 +250,197 @@ class AgentToolService:
         if auth_token:
             params["auth_token"] = auth_token
         tool_result = self.call_search_tickets(params)
-        return self.format_search_tickets_answer(tool_result, params)
+        return self._format_normal_response(
+            self.format_search_tickets_answer(tool_result, params)
+        )
 
     def _handle_unknown_intent(self) -> str:
-        return UNKNOWN_INTENT_ANSWER
+        return self._format_agent_response("UNKNOWN_INTENT", UNKNOWN_INTENT_ANSWER)
+
+    def _merge_pending_intent_if_needed(
+        self,
+        key: str,
+        message: str,
+        intent_result: IntentResult,
+    ) -> IntentResult:
+        pending_intent = self.pending_intent_store.get(key)
+        if pending_intent is None:
+            return intent_result
+        if intent_result.intent in (IntentType.CONFIRM, IntentType.CANCEL):
+            return intent_result
+        if not self._should_merge_pending_intent(pending_intent, intent_result, message):
+            return intent_result
+
+        if pending_intent.intent == IntentType.CREATE_TICKET:
+            return self._merge_create_ticket_pending_intent(
+                pending_intent=pending_intent,
+                message=message,
+            )
+        if pending_intent.intent == IntentType.UPDATE_TICKET_STATUS:
+            return self._merge_update_status_pending_intent(
+                pending_intent=pending_intent,
+                message=message,
+            )
+        if pending_intent.intent in {IntentType.REPLY_SUGGESTION, *GROUNDED_TICKET_AI_INTENTS}:
+            return self._merge_ticket_id_pending_intent(
+                pending_intent=pending_intent,
+                message=message,
+            )
+        return intent_result
+
+    def _should_merge_pending_intent(
+        self,
+        pending_intent: PendingIntent,
+        intent_result: IntentResult,
+        message: str,
+    ) -> bool:
+        if intent_result.intent == pending_intent.intent:
+            return True
+        if intent_result.intent != IntentType.UNKNOWN:
+            return False
+        if pending_intent.intent == IntentType.CREATE_TICKET:
+            supplement = self.intent_recognizer.recognize_create_ticket_fields(message)
+            return any(
+                value
+                for value in (
+                    supplement.title,
+                    supplement.description,
+                    supplement.priority,
+                )
+            )
+        if pending_intent.intent == IntentType.UPDATE_TICKET_STATUS:
+            supplement = self.intent_recognizer.recognize_update_ticket_status_fields(
+                message
+            )
+            return bool(supplement.ticket_id or supplement.target_status)
+        if pending_intent.intent in {IntentType.REPLY_SUGGESTION, *GROUNDED_TICKET_AI_INTENTS}:
+            supplement = self.intent_recognizer.recognize_update_ticket_status_fields(
+                message
+            )
+            return supplement.ticket_id is not None
+        return False
+
+    def _merge_create_ticket_pending_intent(
+        self,
+        pending_intent: PendingIntent,
+        message: str,
+    ) -> IntentResult:
+        supplement = self.intent_recognizer.recognize_create_ticket_fields(message)
+        collected = pending_intent.collected.copy()
+        self._merge_value(collected, "title", supplement.title)
+        self._merge_value(collected, "description", supplement.description)
+        self._merge_value(collected, "priority", supplement.priority)
+        missing_fields = [
+            field
+            for field in ("title", "description", "priority")
+            if not collected.get(field)
+        ]
+        return IntentResult(
+            intent=IntentType.CREATE_TICKET,
+            title=self._optional_str(collected.get("title")),
+            description=self._optional_str(collected.get("description")),
+            priority=self._optional_str(collected.get("priority")),
+            confidence=0.85 if not missing_fields else 0.65,
+            missing_fields=missing_fields,
+            raw_message=message,
+        )
+
+    def _merge_update_status_pending_intent(
+        self,
+        pending_intent: PendingIntent,
+        message: str,
+    ) -> IntentResult:
+        supplement = self.intent_recognizer.recognize_update_ticket_status_fields(message)
+        collected = pending_intent.collected.copy()
+        self._merge_value(collected, "ticket_id", supplement.ticket_id)
+        self._merge_value(collected, "target_status", supplement.target_status)
+        missing_fields = [
+            field
+            for field in ("ticket_id", "target_status")
+            if not collected.get(field)
+        ]
+        ticket_id = collected.get("ticket_id")
+        return IntentResult(
+            intent=IntentType.UPDATE_TICKET_STATUS,
+            ticket_id=int(ticket_id) if ticket_id is not None else None,
+            target_status=self._optional_str(collected.get("target_status")),
+            confidence=0.85 if not missing_fields else 0.65,
+            missing_fields=missing_fields,
+            raw_message=message,
+        )
+
+    def _merge_ticket_id_pending_intent(
+        self,
+        pending_intent: PendingIntent,
+        message: str,
+    ) -> IntentResult:
+        supplement = self.intent_recognizer.recognize_update_ticket_status_fields(message)
+        collected = pending_intent.collected.copy()
+        self._merge_value(collected, "ticket_id", supplement.ticket_id)
+        missing_fields = [] if collected.get("ticket_id") is not None else ["ticket_id"]
+        return IntentResult(
+            intent=pending_intent.intent,
+            ticket_id=int(collected["ticket_id"]) if collected.get("ticket_id") is not None else None,
+            confidence=0.85 if not missing_fields else 0.65,
+            missing_fields=missing_fields,
+            raw_message=message,
+        )
+
+    def _remember_pending_intent(
+        self,
+        key: str,
+        user_id: str,
+        conversation_id: str,
+        intent_result: IntentResult,
+    ) -> None:
+        self.pending_intent_store.set(
+            key,
+            PendingIntent(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                intent=intent_result.intent,
+                collected=self._collected_intent_fields(intent_result),
+                missing_fields=list(intent_result.missing_fields),
+            ),
+        )
+
+    def _collected_intent_fields(self, intent_result: IntentResult) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        for field_name in (
+            "ticket_id",
+            "title",
+            "description",
+            "priority",
+            "target_status",
+            "keyword",
+            "reply_content",
+        ):
+            value = getattr(intent_result, field_name)
+            if value is not None:
+                values[field_name] = value
+        return values
+
+    def _merge_value(
+        self,
+        values: dict[str, Any],
+        key: str,
+        value: Any | None,
+    ) -> None:
+        if value is not None and value != "":
+            values[key] = value
+
+    def _optional_str(self, value: Any | None) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    def _join_chinese_words(self, words: list[str]) -> str:
+        if len(words) <= 1:
+            return "".join(words)
+        if len(words) == 2:
+            return f"{words[0]}和{words[1]}"
+        return f"{'、'.join(words[:-1])}和{words[-1]}"
 
     def should_call_capability_tool(self, message: str) -> bool:
         normalized_message = message.strip().lower()
@@ -258,6 +508,8 @@ class AgentToolService:
         intent_result: IntentResult,
         conversation_id: str,
         auth_token: str | None,
+        user_id: str,
+        pending_intent_key: str,
     ) -> str:
         logger.info("Agent intent detected: create_ticket")
         if intent_result.missing_fields:
@@ -267,8 +519,18 @@ class AgentToolService:
             ):
                 return self.format_invalid_create_ticket_priority_answer()
             logger.info("Create ticket missing fields: %s", intent_result.missing_fields)
-            return self.format_missing_create_ticket_fields_answer(
-                intent_result.missing_fields
+            self._remember_pending_intent(
+                pending_intent_key,
+                user_id,
+                conversation_id,
+                intent_result,
+            )
+            return self._format_missing_fields_response(
+                message=self.format_missing_create_ticket_fields_answer(
+                    intent_result.missing_fields
+                ),
+                missing_fields=intent_result.missing_fields,
+                collected=self._collected_intent_fields(intent_result),
             )
 
         params = {
@@ -276,6 +538,7 @@ class AgentToolService:
             "description": str(intent_result.description),
             "priority": str(intent_result.priority),
         }
+        self.pending_intent_store.delete(pending_intent_key)
 
         pending_action = self.create_pending_create_ticket_action(params)
         self.create_java_pending_action(
@@ -289,7 +552,15 @@ class AgentToolService:
             },
         )
         logger.info("Java pending action created: create_ticket conversation_id=%s", conversation_id)
-        return self.format_create_ticket_confirmation(pending_action)
+        return self._format_pending_confirmation_response(
+            message="请确认是否创建该工单。",
+            action_type=AiPendingActionType.CREATE_TICKET,
+            payload={
+                "title": params["title"],
+                "description": params["description"],
+                "priority": params["priority"],
+            },
+        )
 
     def call_create_ticket(self, params: dict[str, str | bool]) -> dict[str, Any]:
         """Legacy direct write helper.
@@ -352,6 +623,8 @@ class AgentToolService:
         intent_result: IntentResult,
         conversation_id: str,
         auth_token: str | None,
+        user_id: str,
+        pending_intent_key: str,
     ) -> str:
         logger.info("Agent intent detected: update_ticket_status")
         if intent_result.missing_fields:
@@ -364,14 +637,25 @@ class AgentToolService:
                 "Update ticket status missing fields: %s",
                 intent_result.missing_fields,
             )
-            return self.format_missing_update_ticket_status_fields_answer(
-                intent_result.missing_fields
+            self._remember_pending_intent(
+                pending_intent_key,
+                user_id,
+                conversation_id,
+                intent_result,
+            )
+            return self._format_missing_fields_response(
+                message=self.format_missing_update_ticket_status_fields_answer(
+                    intent_result.missing_fields
+                ),
+                missing_fields=intent_result.missing_fields,
+                collected=self._collected_intent_fields(intent_result),
             )
 
         params: dict[str, int | str | bool] = {
             "ticket_id": int(intent_result.ticket_id),
             "status": str(intent_result.target_status),
         }
+        self.pending_intent_store.delete(pending_intent_key)
 
         pending_action, error_message = self.create_pending_update_ticket_status_action(
             params
@@ -391,7 +675,14 @@ class AgentToolService:
             },
         )
         logger.info("Java pending action created: update_ticket_status conversation_id=%s", conversation_id)
-        return self.format_update_ticket_status_confirmation(pending_action)
+        return self._format_pending_confirmation_response(
+            message="请确认是否修改该工单状态。",
+            action_type=AiPendingActionType.UPDATE_TICKET_STATUS,
+            payload={
+                "ticket_id": int(intent_result.ticket_id),
+                "target_status": str(intent_result.target_status),
+            },
+        )
 
     def call_update_ticket_status(
         self, params: dict[str, int | str | bool]
@@ -515,11 +806,25 @@ class AgentToolService:
         self,
         intent_result: IntentResult,
         auth_token: str | None,
+        user_id: str,
+        conversation_id: str,
+        pending_intent_key: str,
     ) -> str:
         logger.info("Agent intent detected: reply_suggestion")
         if intent_result.missing_fields:
-            return "请提供要生成回复建议的工单 ID。"
+            self._remember_pending_intent(
+                pending_intent_key,
+                user_id,
+                conversation_id,
+                intent_result,
+            )
+            return self._format_missing_fields_response(
+                message="请提供要生成回复建议的工单 ID。",
+                missing_fields=intent_result.missing_fields,
+                collected=self._collected_intent_fields(intent_result),
+            )
 
+        self.pending_intent_store.delete(pending_intent_key)
         try:
             result = self.ticket_ai_service.generate_reply_suggestion_by_ticket_id(
                 int(intent_result.ticket_id),
@@ -527,9 +832,17 @@ class AgentToolService:
             )
         except AppException as exc:
             logger.exception("Reply suggestion intent failed")
-            return exc.message
+            if exc.code in (LLM_CALL_FAILED, LLM_CONFIG_MISSING):
+                return self._format_llm_error_response(
+                    exc,
+                    default_message="AI 回复建议生成失败，请稍后重试或手动填写。",
+                )
+            return self._format_app_exception_response(exc)
 
-        return json.dumps(result.model_dump(mode="json"), ensure_ascii=False)
+        return self._format_json_result_response(
+            message="回复建议生成完成",
+            data=result.model_dump(mode="json"),
+        )
 
     def _handle_save_ai_reply_intent(
         self,
@@ -546,7 +859,11 @@ class AgentToolService:
             missing_text = "、".join(
                 field_names.get(field, field) for field in intent_result.missing_fields
             )
-            return f"保存 AI 回复建议还缺少必要信息：{missing_text}。请补充后我再发起确认。"
+            return self._format_missing_fields_response(
+                message=f"保存 AI 回复建议还缺少必要信息：{missing_text}。请补充后我再发起确认。",
+                missing_fields=intent_result.missing_fields,
+                collected=self._collected_intent_fields(intent_result),
+            )
 
         return self.create_pending_save_ai_reply_action(
             auth_token=auth_token,
@@ -559,12 +876,26 @@ class AgentToolService:
         self,
         intent_result: IntentResult,
         auth_token: str | None,
+        user_id: str,
+        conversation_id: str,
+        pending_intent_key: str,
     ) -> str:
         label = GROUNDED_TICKET_AI_LABELS.get(intent_result.intent, "AI 分析")
         logger.info("Agent intent detected: %s", intent_result.intent.value)
         if intent_result.missing_fields:
-            return f"{label}还缺少必要信息：工单 ID。请说明要分析几号工单。"
+            self._remember_pending_intent(
+                pending_intent_key,
+                user_id,
+                conversation_id,
+                intent_result,
+            )
+            return self._format_missing_fields_response(
+                message="请提供要分析的工单 ID。",
+                missing_fields=intent_result.missing_fields,
+                collected=self._collected_intent_fields(intent_result),
+            )
 
+        self.pending_intent_store.delete(pending_intent_key)
         handlers = {
             IntentType.TICKET_SUMMARY: self.ticket_ai_service.generate_ticket_summary_by_ticket_id,
             IntentType.PRIORITY_SUGGESTION: self.ticket_ai_service.suggest_priority_by_ticket_id,
@@ -580,9 +911,20 @@ class AgentToolService:
             )
         except AppException as exc:
             logger.exception("Grounded ticket AI intent failed")
-            return exc.message
+            if exc.code in (LLM_CALL_FAILED, LLM_CONFIG_MISSING):
+                return self._format_llm_error_response(
+                    exc,
+                    default_message="AI 分析失败，请稍后重试。",
+                )
+            return self._format_app_exception_response(exc)
 
-        return json.dumps(result.model_dump(mode="json"), ensure_ascii=False)
+        return self._format_json_result_response(
+            message=GROUNDED_TICKET_AI_RESULT_MESSAGES.get(
+                intent_result.intent,
+                "AI 分析完成",
+            ),
+            data=result.model_dump(mode="json"),
+        )
 
     def handle_pending_action_approval(
         self,
@@ -627,6 +969,8 @@ class AgentToolService:
             return "已取消修改工单状态，本次操作未执行。"
         if pending_action.actionType == AiPendingActionType.SAVE_AI_REPLY:
             return "已取消保存 AI 回复建议，本次操作未执行。"
+        if pending_action.actionType == AiPendingActionType.APPLY_AI_CATEGORY:
+            return "已取消采纳 AI 分类建议，本次操作未执行。"
         return "已取消待确认操作，本次操作未执行。"
 
     def format_java_pending_action_confirm_answer(
@@ -659,6 +1003,15 @@ class AgentToolService:
             ticket_id = reply.get("ticketId") or payload.get("ticketId")
             reply_id = reply.get("id")
             return f"已保存 {ticket_id} 号工单的 AI 回复建议，回复 ID {reply_id}。"
+
+        if action_type == AiPendingActionType.APPLY_AI_CATEGORY:
+            category_result = business_result if isinstance(business_result, dict) else {}
+            ticket_id = category_result.get("id") or payload.get("ticketId")
+            old_category = category_result.get("oldCategory") or category_result.get("old_category")
+            new_category = category_result.get("newCategory") or category_result.get("new_category") or payload.get("category")
+            if old_category:
+                return f"已将 {ticket_id} 号工单分类从 {old_category} 更新为 {new_category}。"
+            return f"已将 {ticket_id} 号工单分类更新为 {new_category}。"
 
         return "待确认操作已执行。"
 
@@ -736,7 +1089,10 @@ class AgentToolService:
             "priority": "优先级",
         }
         if len(missing_fields) > 1:
-            return "请补充工单标题、描述和优先级。"
+            missing_text = self._join_chinese_words(
+                [field_names[field] for field in missing_fields]
+            )
+            return f"请补充工单{missing_text}。"
         missing_text = "、".join(field_names[field] for field in missing_fields)
         if missing_fields == ["priority"]:
             return (
@@ -832,6 +1188,145 @@ class AgentToolService:
             safe_params["auth_token"] = "***"
         return safe_params
 
+    def _ensure_structured_response(self, result: str) -> str:
+        parsed = self._parse_agent_response(result)
+        if parsed is not None:
+            return result
+
+        if result == UNKNOWN_INTENT_ANSWER:
+            return self._format_agent_response("UNKNOWN_INTENT", result)
+        if self._contains_any(
+            result,
+            ("登录状态已失效", "请重新登录", "Token格式错误", "token invalid", "token expired"),
+        ):
+            return self._serialize_agent_response(ResponseBuilder.unauthorized(result))
+        if self._contains_any(
+            result,
+            ("没有权限", "无权访问", "你没有权限执行该操作", "目标工单不存在，或你无权访问该工单"),
+        ):
+            return self._serialize_agent_response(ResponseBuilder.forbidden(result))
+        if self._contains_any(result, ("服务暂时异常", "无法连接", "请稍后重试")):
+            return self._format_error_response(result)
+
+        return self._format_normal_response(result)
+
+    def _format_agent_response(
+        self,
+        response_type: str,
+        message: str,
+        data: dict[str, Any] | list[Any] | None = None,
+        risk_flags: list[str] | None = None,
+    ) -> str:
+        return self._serialize_agent_response(
+            AgentResponse(
+                type=response_type,
+                message=message,
+                data=data,
+                risk_flags=risk_flags or [],
+            )
+        )
+
+    def _format_normal_response(self, message: str) -> str:
+        return self._serialize_agent_response(ResponseBuilder.normal(message))
+
+    def _format_missing_fields_response(
+        self,
+        message: str,
+        missing_fields: list[str],
+        collected: dict[str, Any],
+    ) -> str:
+        return self._serialize_agent_response(
+            ResponseBuilder.missing_fields(
+                message=message,
+                missing_fields=missing_fields,
+                collected=self._strip_sensitive_payload(collected),
+            )
+        )
+
+    def _format_pending_confirmation_response(
+        self,
+        message: str,
+        action_type: AiPendingActionType,
+        payload: dict[str, Any],
+    ) -> str:
+        return self._serialize_agent_response(
+            ResponseBuilder.pending_confirmation(
+                message=message,
+                action_type=action_type.value,
+                payload=self._strip_sensitive_payload(payload),
+            )
+        )
+
+    def _format_error_response(
+        self,
+        message: str,
+        risk_flags: list[str] | None = None,
+    ) -> str:
+        return self._serialize_agent_response(ResponseBuilder.error(message, risk_flags))
+
+    def _format_json_result_response(
+        self,
+        message: str,
+        data: dict[str, Any],
+    ) -> str:
+        return self._serialize_agent_response(
+            ResponseBuilder.json_result(message=message, data=data)
+        )
+
+    def _format_app_exception_response(self, exc: AppException) -> str:
+        return self._serialize_agent_response(
+            ResponseBuilder.from_status_error(
+                status_code=exc.status_code,
+                message=exc.message,
+                risk_flags=self._risk_flags_from_exception(exc),
+            )
+        )
+
+    def _format_llm_error_response(
+        self,
+        exc: AppException,
+        default_message: str,
+    ) -> str:
+        risk_flags = self._risk_flags_from_exception(exc) or ["LLM调用失败"]
+        message = exc.message if "JSON解析失败" in risk_flags else default_message
+        return self._format_error_response(message, risk_flags=risk_flags)
+
+    def _risk_flags_from_exception(self, exc: AppException) -> list[str]:
+        detail = exc.detail
+        if not isinstance(detail, dict):
+            return []
+        risk_flags = detail.get("risk_flags")
+        if not isinstance(risk_flags, list):
+            return []
+        return [flag for flag in risk_flags if isinstance(flag, str) and flag]
+
+    def _serialize_agent_response(self, response: Any) -> str:
+        if hasattr(response, "model_dump"):
+            return json.dumps(response.model_dump(mode="json"), ensure_ascii=False)
+        return json.dumps(response, ensure_ascii=False)
+
+    def _parse_agent_response(self, value: str) -> dict[str, Any] | None:
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        if isinstance(parsed.get("type"), str) and isinstance(parsed.get("message"), str):
+            return parsed
+        return None
+
+    def _to_agent_response(self, value: str) -> AgentResponse:
+        structured_response = self._ensure_structured_response(value)
+        parsed = self._parse_agent_response(structured_response)
+        if parsed is None:
+            return ResponseBuilder.normal(structured_response)
+        return AgentResponse.model_validate(parsed)
+
+    def _contains_any(self, text: str, fragments: tuple[str, ...]) -> bool:
+        normalized = text.lower()
+        return any(fragment in text or fragment.lower() in normalized for fragment in fragments)
+
     def _resolve_conversation_id(
         self,
         user_id: str | None,
@@ -842,6 +1337,11 @@ class AgentToolService:
         if user_id and str(user_id).strip():
             return f"user-{str(user_id).strip()}"
         return DEFAULT_SESSION_KEY
+
+    def _resolve_user_id(self, user_id: str | None) -> str:
+        if user_id and str(user_id).strip():
+            return str(user_id).strip()
+        return "anonymous"
 
     def _strip_sensitive_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         safe_payload = {}

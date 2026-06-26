@@ -34,6 +34,12 @@ CREATE INDEX idx_ticket_status ON ticket(status);
 CREATE INDEX idx_ticket_priority ON ticket(priority);
 CREATE INDEX idx_ticket_category ON ticket(category);
 
+-- 如果旧表缺少分类或处理人字段，可按需执行下面语句。
+-- ALTER TABLE ticket
+-- MODIFY COLUMN category VARCHAR(64) NULL COMMENT '工单分类',
+-- ADD COLUMN assigned_to BIGINT NULL COMMENT '处理人用户ID';
+-- CREATE INDEX idx_ticket_assigned_to ON ticket(assigned_to);
+
 -- =========================================================
 -- ticket_reply 表字段和索引
 -- =========================================================

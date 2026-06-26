@@ -43,6 +43,11 @@ class TicketSummaryService(TicketAiCapabilityBase):
             latest_reply = ticket_detail.replies[-1].content
             summary += f"。最近一次历史回复：{latest_reply}"
         summary += "。"
+        risk_flags = self.grounding_service.add_unsupported_conclusion_flag(
+            output_text=f"{summary}\n" + "\n".join(key_points),
+            ticket_detail=ticket_detail,
+            risk_flags=risk_flags,
+        )
 
         return TicketSummaryResult(
             summary=summary,

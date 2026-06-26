@@ -8,6 +8,7 @@ class AiPendingActionType(str, Enum):
     CREATE_TICKET = "CREATE_TICKET"
     UPDATE_TICKET_STATUS = "UPDATE_TICKET_STATUS"
     SAVE_AI_REPLY = "SAVE_AI_REPLY"
+    APPLY_AI_CATEGORY = "APPLY_AI_CATEGORY"
 
 
 class AiPendingActionStatus(str, Enum):

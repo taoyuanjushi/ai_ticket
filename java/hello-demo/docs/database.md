@@ -81,7 +81,8 @@ ticket_reply.ticket_id 关联 ticket.id
 | content | TEXT | 工单内容 |
 | status | VARCHAR(30) | OPEN / PROCESSING / CLOSED |
 | priority | VARCHAR(30) | LOW / MEDIUM / HIGH / URGENT |
-| category | VARCHAR(50) | 工单分类 |
+| category | VARCHAR(64) | 工单分类，允许为空 |
+| assigned_to | BIGINT | 处理人用户 ID，允许为空 |
 | user_id | BIGINT | 提交工单的用户 ID |
 | created_at | DATETIME | 创建时间 |
 | updated_at | DATETIME | 更新时间 |
@@ -96,7 +97,7 @@ PROCESSING 处理中
 CLOSED      已关闭
 ```
 
-创建工单时，`ticket.user_id` 由后端从 JWT 当前登录用户中获取，不接收前端传入。
+创建工单时，`ticket.user_id` 由后端从 JWT 当前登录用户中获取，不接收前端传入。`assigned_to` 指向 `user.id`，只能分配给存在的 `STAFF` / `ADMIN` 用户。
 
 ## 5. ticket_reply 表
 
@@ -146,6 +147,8 @@ AI    后续 AI 回复建议
 CREATE_TICKET
 REPLY_TICKET
 UPDATE_TICKET_STATUS
+TICKET_CATEGORY_UPDATED
+TICKET_ASSIGNEE_UPDATED
 DELETE_TICKET
 LOGIN_SUCCESS
 LOGIN_FAILED
@@ -170,6 +173,7 @@ idx_ticket_user_id：用于按用户查询工单
 idx_ticket_status：用于按状态筛选工单
 idx_ticket_priority：用于按优先级筛选工单
 idx_ticket_category：用于按分类筛选工单
+idx_ticket_assigned_to：用于按处理人筛选工单
 idx_reply_ticket_id：用于查询某个工单下的回复
 idx_reply_user_id：用于查询某个用户发表的回复
 idx_operation_log_user_id：用于按用户查询日志
@@ -261,7 +265,7 @@ private Long userId;
 当前实体和表字段对应关系：
 
 - `User`：`id, username, password, name, age, email, role, createdAt, updatedAt`
-- `Ticket`：`id, title, content, status, priority, category, userId, createdAt, updatedAt`
+- `Ticket`：`id, title, content, status, priority, category, assignedTo, userId, createdAt, updatedAt`
 - `TicketReply`：`id, ticketId, userId, content, replyType, createdAt, updatedAt`
 - `OperationLog`：`id, userId, operationType, businessType, businessId, content, createdAt`
 

@@ -5,7 +5,6 @@ import type {
   LoginResponse,
   OperationLog,
   PageResult,
-  ReplySuggestionResponse,
   Ticket,
   TicketCreateInput,
   TicketDetail,
@@ -38,6 +37,9 @@ export const api = {
 
   updateTicketStatus: (id: number, status: TicketStatus) =>
     request<Ticket>(`/tickets/${id}/status`, { method: "PUT", body: { status } }),
+
+  updateTicketAssignee: (id: number, assignedTo: number | null) =>
+    request<Ticket>(`/tickets/${id}/assignee`, { method: "PATCH", body: { assignedTo } }),
 
   deleteTicket: (id: number) => request<boolean>(`/tickets/${id}`, { method: "DELETE" }),
 
@@ -76,18 +78,32 @@ export const api = {
   getOperationLogs: (query: {
     page?: number;
     size?: number;
-    userId?: number | string;
-    operationType?: string;
-    businessType?: string;
+    ticketId?: number | string;
+    operatorId?: number | string;
+    action?: string;
   }) => request<PageResult<OperationLog>>("/operation-logs", { query }),
+
+  getTicketLogs: (ticketId: number, query: { page?: number; size?: number }) =>
+    request<PageResult<OperationLog>>(`/tickets/${ticketId}/logs`, { query }),
 
   aiChat: (message: string, conversationId: string) =>
     request<AiChatResponse>("/ai/chat", { method: "POST", body: { message, conversationId } }),
 
-  replySuggestion: (ticketId: number) =>
-    request<ReplySuggestionResponse>(`/ai/tickets/${ticketId}/reply-suggestion`, {
+  createAiReplyPending: (ticketId: number, conversationId: string, content: string) =>
+    request<AiChatResponse>(`/tickets/${ticketId}/ai-replies/pending`, {
       method: "POST",
+      body: { conversationId, content },
     }),
+
+  createCategoryPending: (
+    ticketId: number,
+    body: {
+      conversationId: string;
+      category: string;
+      confidence?: number;
+      reason?: string;
+    },
+  ) => request<AiChatResponse>(`/tickets/${ticketId}/category/pending`, { method: "POST", body }),
 };
 
 export const priorityOptions: TicketPriority[] = ["LOW", "MEDIUM", "HIGH", "URGENT"];

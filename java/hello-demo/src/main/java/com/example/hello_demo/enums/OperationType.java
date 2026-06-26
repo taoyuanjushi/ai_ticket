@@ -8,6 +8,8 @@ public enum OperationType {
     CREATE_TICKET,
     REPLY_TICKET,
     UPDATE_TICKET_STATUS,
+    TICKET_CATEGORY_UPDATED,
+    TICKET_ASSIGNEE_UPDATED,
     DELETE_TICKET,
     LOGIN_SUCCESS,
     LOGIN_FAILED,
@@ -17,7 +19,13 @@ public enum OperationType {
     AI_PENDING_ACTION_CREATED,
     AI_WRITE_CONFIRMED,
     AI_WRITE_CANCELLED,
-    AI_REPLY_CREATED;
+    AI_REPLY_CREATED,
+    AI_REPLY_SAVE_PENDING_CREATED,
+    AI_REPLY_SAVED,
+    AI_CATEGORY_APPLY_PENDING_CREATED,
+    AI_CATEGORY_APPLIED,
+    AI_ACTION_CANCELLED,
+    AI_ACTION_CONFIRM_FAILED;
 
     public static boolean isValid(String operationType) {
         return from(operationType) != null;

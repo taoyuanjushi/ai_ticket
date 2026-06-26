@@ -376,3 +376,4 @@ def fake_java_ticket_client(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent_tool_service, "JavaTicketClient", FakeJavaTicketClient)
     monkeypatch.setattr(ai_capability_base, "JavaTicketClient", FakeJavaTicketClient)
     agent_api.agent_tool_service.java_ticket_client = FakeJavaTicketClient()
+    agent_api.agent_tool_service.pending_intent_store.clear()

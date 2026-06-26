@@ -10,6 +10,7 @@ import { TicketDetailPage } from "./pages/TicketDetailPage";
 import { TicketListPage } from "./pages/TicketListPage";
 import { TicketNewPage } from "./pages/TicketNewPage";
 import { UsersPage } from "./pages/UsersPage";
+import { canViewAdminArea, canViewOperationLogs, normalizeRole } from "./auth/permissions";
 import { useAuthStore } from "./state/authStore";
 import type { UserRole } from "./types/domain";
 
@@ -30,7 +31,7 @@ export function App() {
         <Route
           path="users"
           element={
-            <RequireRole minimum="ADMIN">
+            <RequireRole canAccess={canViewAdminArea}>
               <UsersPage />
             </RequireRole>
           }
@@ -38,7 +39,7 @@ export function App() {
         <Route
           path="logs"
           element={
-            <RequireRole minimum="ADMIN">
+            <RequireRole canAccess={canViewOperationLogs}>
               <LogsPage />
             </RequireRole>
           }
@@ -46,7 +47,7 @@ export function App() {
         <Route
           path="settings"
           element={
-            <RequireRole minimum="ADMIN">
+            <RequireRole canAccess={canViewAdminArea}>
               <SettingsPage />
             </RequireRole>
           }
@@ -59,24 +60,17 @@ export function App() {
 }
 
 function RequireRole({
-  minimum,
+  canAccess,
   children,
 }: {
-  minimum: "STAFF" | "ADMIN";
+  canAccess: (role?: UserRole | string | null) => boolean;
   children: ReactNode;
 }) {
-  const role = useAuthStore((state) => state.user?.role ?? "USER");
+  const role = normalizeRole(useAuthStore((state) => state.user?.role));
 
-  if (!canAccess(role, minimum)) {
+  if (!canAccess(role)) {
     return <Navigate to="/forbidden" replace />;
   }
 
   return <>{children}</>;
-}
-
-function canAccess(role: UserRole, minimum: "STAFF" | "ADMIN") {
-  if (minimum === "STAFF") {
-    return role === "STAFF" || role === "ADMIN";
-  }
-  return role === "ADMIN";
 }

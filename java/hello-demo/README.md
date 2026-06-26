@@ -32,7 +32,15 @@
 
 ### Ticket 工单模块
 
-提供工单创建、分页条件查询、详情查询、修改、删除和状态流转。创建工单时不需要前端传 `userId`，后端从 JWT 中读取当前登录用户。
+提供工单创建、分页条件查询、详情查询、修改、删除、状态流转、分类修改和处理人分配。创建工单时不需要前端传 `userId`，后端从 JWT 中读取当前登录用户。
+
+当前 `ticket` 表包含 `category` 和 `assigned_to`：
+
+- `category` 表示工单分类，允许为空，长度不超过 64。
+- `assigned_to` 表示处理人用户 ID，允许为空。
+- `STAFF` / `ADMIN` 可以修改分类。
+- `STAFF` 可以把工单分配给自己，`ADMIN` 可以分配给任意 `STAFF` / `ADMIN` 或取消分配。
+- 本阶段暂不新增 `deadline`、`responseDueAt`、`resolveDueAt`、`closedAt` 等 SLA 字段，SLA 仍作为 AI 风险建议。
 
 ### TicketReply 工单回复模块
 
@@ -53,7 +61,7 @@
 - 用户详情 key：`user:detail:{id}`，TTL 30 分钟。
 - 工单详情 key：`ticket:detail:{id}`，TTL 10 分钟。
 
-更新或删除用户后删除用户缓存。修改工单、修改状态、删除工单、新增回复后删除工单详情缓存。
+更新或删除用户后删除用户缓存。修改工单、修改状态、修改分类、分配处理人、删除工单、新增回复后删除工单详情缓存。
 
 ### 统一响应与异常处理
 
@@ -336,6 +344,38 @@ Authorization: Bearer <token>
 ```text
 docs/postman-test-guide.md
 ```
+
+## 自动化测试方式
+
+运行 Java 回归测试：
+
+```powershell
+mvn test
+```
+
+当前自动化测试包含两类：
+
+1. Service 单元测试：直接验证权限、状态流转、pending_action 幂等、缓存安全等核心业务规则。
+2. 接口级集成测试：使用 `MockMvc` 模拟真实 HTTP 请求，走 `JwtInterceptor -> Controller -> Service`，再用 mock Mapper / mock Redis 缓存服务隔离 MySQL 和 Redis。
+
+接口级测试使用真实 `JwtUtil` 生成测试 token，不手写假 token。固定测试身份：
+
+| 账号 | 角色 | 用途 |
+| --- | --- | --- |
+| tom | USER | 验证普通用户只能看自己的工单，不能修改状态，不能看全局操作日志 |
+| staff | STAFF | 验证可以创建 pending_action、confirm 后执行业务、重复 confirm 不重复执行、cancel 后不执行 |
+| admin | ADMIN | 验证可以查看操作日志 |
+
+重点覆盖的安全规则：
+
+- `GET /tickets/{id}/detail`：tom 不能看到他人工单；响应体不能泄露他人工单标题、描述或回复。
+- `PUT /tickets/{id}/status`：tom 不能修改状态；失败后不更新工单、不写成功日志、不清理或写错缓存。
+- `/ai/pending-actions`：写操作必须先创建 `PENDING`；confirm 后才执行；重复 confirm 不重复执行；cancel 后不能再 confirm。
+- `GET /operation-logs`：admin 可以查看日志，USER 返回 403；日志响应会脱敏 `token/password/Authorization/auth_token` 片段。
+- Redis 缓存安全：即使工单详情命中缓存，返回前仍会按当前登录用户做权限校验，不能因为缓存绕过权限。
+- `/ai/chat`：请求体中的 `userId` / `role` 伪造字段无效，Java 只使用 JWT 中解析出的当前用户身份。
+
+当前没有单独的 `application-test.properties`。接口级测试通过 mock Mapper 和 mock 缓存服务运行，不需要启动本地 MySQL 或 Redis；手工联调和 Postman 测试仍需要按下文启动 MySQL / Redis。
 
 接口文档见：
 

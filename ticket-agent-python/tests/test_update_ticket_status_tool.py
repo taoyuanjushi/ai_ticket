@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.api import agent_api
 from app.main import app
+from app.schemas.pending_action import AiPendingActionType
 from app.services.agent_tool_service import UNKNOWN_INTENT_ANSWER
 from app.tools.mock_ticket_data import reset_mock_tickets
 from app.tools.ticket_tools import search_tickets, update_ticket_status
@@ -105,8 +106,12 @@ def test_agent_chat_update_open_ticket_to_processing() -> None:
     )
 
     assert response.status_code == 200
-    answer = response.json()["answer"]
-    assert "请确认：是否将 1 号工单状态修改为 PROCESSING" in answer
+    body = response.json()
+    assert body["type"] == "PENDING_CONFIRMATION"
+    assert body["data"] == {
+        "actionType": AiPendingActionType.UPDATE_TICKET_STATUS.value,
+        "payload": {"ticket_id": 1, "target_status": "PROCESSING"},
+    }
 
     confirm_response = client.post("/agent/chat", json={"message": "确认", "auth_token": "A_TOKEN"})
     answer = confirm_response.json()["answer"]
@@ -120,7 +125,8 @@ def test_agent_chat_update_processing_ticket_to_closed_from_completed_text() -> 
     )
 
     assert response.status_code == 200
-    assert "请确认：是否将 2 号工单状态修改为 CLOSED" in response.json()["answer"]
+    assert response.json()["type"] == "PENDING_CONFIRMATION"
+    assert response.json()["data"]["payload"] == {"ticket_id": 2, "target_status": "CLOSED"}
 
     confirm_response = client.post("/agent/chat", json={"message": "确认", "auth_token": "A_TOKEN"})
     assert "已将 2 号工单状态从 PROCESSING 修改为 CLOSED" in confirm_response.json()["answer"]
@@ -133,7 +139,8 @@ def test_agent_chat_close_open_ticket_succeeds() -> None:
     )
 
     assert response.status_code == 200
-    assert "请确认：是否将 1 号工单状态修改为 CLOSED" in response.json()["answer"]
+    assert response.json()["type"] == "PENDING_CONFIRMATION"
+    assert response.json()["data"]["payload"] == {"ticket_id": 1, "target_status": "CLOSED"}
 
     confirm_response = client.post("/agent/chat", json={"message": "确认", "auth_token": "A_TOKEN"})
     assert "已将 1 号工单状态从 OPEN 修改为 CLOSED" in confirm_response.json()["answer"]
@@ -146,7 +153,11 @@ def test_agent_chat_ticket_not_found_returns_friendly_message() -> None:
     )
 
     assert response.status_code == 200
-    assert "请确认：是否将 999 号工单状态修改为 PROCESSING" in response.json()["answer"]
+    assert response.json()["type"] == "PENDING_CONFIRMATION"
+    assert response.json()["data"]["payload"] == {
+        "ticket_id": 999,
+        "target_status": "PROCESSING",
+    }
 
     confirm_response = client.post("/agent/chat", json={"message": "确认", "auth_token": "A_TOKEN"})
     assert "目标工单不存在，或你无权访问该工单。" in confirm_response.json()["answer"]

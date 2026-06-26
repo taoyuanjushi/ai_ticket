@@ -35,6 +35,11 @@ class TicketAiCapabilityBase:
                 code=JAVA_API_ERROR,
                 message=exc.message,
                 status_code=exc.status_code,
+                detail={
+                    "risk_flags": self.grounding_service.java_error_risk_flags(
+                        exc.status_code
+                    )
+                },
             ) from exc
 
     def search_tickets(
@@ -44,15 +49,22 @@ class TicketAiCapabilityBase:
     ) -> list[TicketDTO]:
         try:
             java_ticket_client = self.java_ticket_client or JavaTicketClient()
-            return java_ticket_client.search_tickets(
-                auth_token=auth_token,
-                query=query,
-            )
+            if hasattr(java_ticket_client, "list_tickets"):
+                return java_ticket_client.list_tickets(
+                    auth_token=auth_token,
+                    query=query,
+                )
+            return java_ticket_client.search_tickets(auth_token=auth_token, query=query)
         except JavaApiError as exc:
             raise AppException(
                 code=JAVA_API_ERROR,
                 message=exc.message,
                 status_code=exc.status_code,
+                detail={
+                    "risk_flags": self.grounding_service.java_error_risk_flags(
+                        exc.status_code
+                    )
+                },
             ) from exc
 
     def base_risk_flags(self, ticket_detail: TicketDetailDTO) -> list[str]:
