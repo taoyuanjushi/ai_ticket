@@ -36,10 +36,88 @@ postman                 Postman collection 和本地环境
 Java 表：ai_pending_action
 隔离维度：当前登录 userId + conversationId
 状态：PENDING / CONFIRMED / CANCELLED / EXPIRED
-动作：CREATE_TICKET / UPDATE_TICKET_STATUS / SAVE_AI_REPLY
+动作：CREATE_TICKET / UPDATE_TICKET_STATUS / SAVE_AI_REPLY / APPLY_AI_CATEGORY
 ```
 
 Python 中的 `InMemoryPendingActionStoreForTest` 只保留给本地学习和旧测试兼容，不是生产状态来源。`pending_action` 中不保存 token；确认时必须使用当前请求携带的有效 Authorization。
+
+## 1.1 工单业务模型
+
+当前 `ticket` 表核心字段包含：
+
+```text
+id, title, content, status, priority, category, assigned_to, user_id, created_at, updated_at
+```
+
+- `category`：工单分类，允许为空，长度不超过 64。
+- `assigned_to`：处理人用户 ID，允许为空，表示尚未分配。
+- `user_id`：提交人用户 ID，只能由 Java 后端从当前 JWT 登录上下文写入，不能相信前端传入。
+
+权限规则：
+
+- `STAFF` / `ADMIN` 可以修改工单分类。
+- `USER` 不能修改分类或处理人。
+- `STAFF` 可以把工单分配给自己。
+- `ADMIN` 可以分配给任意 `STAFF` / `ADMIN`，也可以取消分配。
+- `assigned_to` 只能指向存在的 `STAFF` / `ADMIN` 用户。
+
+本阶段没有新增 `deadline`、`responseDueAt`、`resolveDueAt`、`closedAt` 等 SLA 字段。SLA 仍然只作为 AI 风险建议，不落库。
+
+## 1.2 AI 结果保存策略
+
+AI 结果分为两类：
+
+| 类型 | 当前策略 |
+|---|---|
+| 回复建议 | 默认只展示；用户保存时创建 `SAVE_AI_REPLY` pending_action，Confirm 后保存为 `TicketReplyType.AI` |
+| 分类建议 | 默认只展示；用户采纳时创建 `APPLY_AI_CATEGORY` pending_action，Confirm 后更新 `Ticket.category` |
+| 优先级建议 | 当前只展示，不直接修改 `priority` |
+| 工单摘要 | 当前只展示，不保存 |
+| SLA 风险 | 当前只展示，不保存 |
+
+保存闭环：
+
+```text
+AI 生成建议
+-> 前端展示
+-> 用户点击保存 / 采纳
+-> Java 创建 pending_action
+-> 用户 Confirm
+-> Java Service 重新校验权限并执行保存
+-> OperationLog
+-> 清理工单缓存
+```
+
+公开接口不允许绕过确认流程直接保存 AI 结果。保存 AI 回复请使用：
+
+```http
+POST /tickets/{id}/ai-replies/pending
+```
+
+采纳分类请使用：
+
+```http
+POST /tickets/{id}/category/pending
+```
+
+## 1.3 OperationLog 审计日志
+
+`OperationLog` 记录关键业务操作，例如创建工单、修改状态、回复工单、确认或取消 AI 写操作。它是给业务审计和问题追踪看的日志，不是包含异常堆栈的程序运行日志。
+
+当前接口：
+
+```http
+GET /tickets/{id}/logs?page=1&size=20
+GET /operation-logs?page=1&size=20&ticketId=&operatorId=&action=
+```
+
+权限规则：
+
+- `USER` 不能查看操作日志。
+- `STAFF` 可以查看当前权限范围内的工单相关日志。
+- `ADMIN` 可以查看全部操作日志。
+
+分页规则：`page` 从 1 开始，`size` 默认 20，最大 100，结果按 `createdAt` 倒序。详细说明见 [OperationLog 审计日志说明](docs/operation-log-audit-guide.md)。
 
 ## 2. 启动顺序
 
@@ -74,6 +152,14 @@ java/hello-demo/src/main/resources/sql/operation_log.sql
 java/hello-demo/src/main/resources/sql/ai_pending_action.sql
 docs/stage5-test-data.sql
 ```
+
+已有数据库升级时，请手动执行本次工单模型迁移：
+
+```text
+docs/migrations/add_ticket_category_assigned_to.sql
+```
+
+注意：如果 Docker MySQL volume 已经存在，MySQL 不会自动重新执行初始化 SQL；旧库必须手动执行 migration。
 
 PowerShell 检查端口：
 
@@ -330,9 +416,48 @@ npm.cmd run build
 - 自动化测试检查权限、状态流转、pending_action 幂等、防幻觉、JSON 解析等规则。
 - 手工联调检查真实 MySQL、Redis、Java、Python、前端、JWT 和网络配置是否连通。
 
-## 7. 常见问题
+## 7. Docker 部署
 
-### 7.1 401 Token 格式错误
+本仓库提供 Docker Compose 部署闭环文件：
+
+```text
+docker-compose.prod.yml
+.env.example
+java/hello-demo/Dockerfile
+ticket-agent-python/Dockerfile
+frontend/Dockerfile
+frontend/nginx.conf
+docs/deploy-guide.md
+```
+
+快速校验配置：
+
+```powershell
+Copy-Item .env.example .env
+docker compose -f docker-compose.prod.yml --env-file .env config
+```
+
+构建并启动：
+
+```powershell
+docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+```
+
+本地 Docker 部署默认访问：
+
+```text
+http://localhost:8088
+```
+
+默认只暴露前端 `8088` 端口到宿主机；容器内部 Nginx 仍监听 `80`。如果服务器要使用 `80`，可在 `.env` 中设置 `FRONTEND_PORT=80`；如果 80 被占用，继续使用 `8088` 或其他端口。MySQL、Redis、Java、Python 默认只在 Docker 内网通信。详细部署、日志、备份、故障排查见：
+
+```text
+docs/deploy-guide.md
+```
+
+## 8. 常见问题
+
+### 8.1 401 Token 格式错误
 
 前端和 Postman 只保存 token 字符串即可；发请求时放在 Header：
 
@@ -342,7 +467,7 @@ Authorization: Bearer <token>
 
 不要把 token 放进 body，也不要把完整 token 写进日志或文档。
 
-### 7.2 Python 端口变化
+### 8.2 Python 端口变化
 
 如果 Python 从 8001 改成 8002，Java 必须同步：
 
@@ -352,7 +477,7 @@ $env:AI_SERVICE_BASE_URL="http://127.0.0.1:8002"
 
 然后重启 Java。
 
-### 7.3 Redis 没启动
+### 8.3 Redis 没启动
 
 工单详情缓存依赖 Redis。先确认：
 
@@ -360,7 +485,7 @@ $env:AI_SERVICE_BASE_URL="http://127.0.0.1:8002"
 docker exec redis-study redis-cli ping
 ```
 
-### 7.4 生产安全
+### 8.4 生产安全
 
 生产环境必须修改：
 
@@ -370,3 +495,4 @@ docker exec redis-study redis-cli ping
 - GitHub、OpenAI、数据库等所有真实凭证
 
 不要提交 `.env`、真实 token、真实 API Key。
+
