@@ -110,7 +110,7 @@ def test_create_ticket_cancel_does_not_execute_and_clears_pending_action() -> No
     response = client.post("/agent/chat", json={"message": "取消", "auth_token": AUTH_TOKEN})
 
     assert response.status_code == 200
-    assert response.json()["answer"] == "已取消当前待补充或待确认的操作。"
+    assert response.json()["answer"] == "已取消创建工单，本次操作未执行。"
     assert has_java_pending_action() is False
     assert len(MOCK_TICKETS) == 5
 
@@ -156,7 +156,7 @@ def test_update_ticket_status_cancel_does_not_execute_and_clears_pending_action(
     response = client.post("/agent/chat", json={"message": "取消", "auth_token": AUTH_TOKEN})
 
     assert response.status_code == 200
-    assert response.json()["answer"] == "已取消当前待补充或待确认的操作。"
+    assert response.json()["answer"] == "已取消修改工单状态，本次操作未执行。"
     assert has_java_pending_action() is False
     assert find_ticket_by_id(1)["status"] == "OPEN"
 
@@ -178,7 +178,7 @@ def test_cancel_without_pending_action_does_not_execute_any_tool() -> None:
     response = client.post("/agent/chat", json={"message": "取消", "auth_token": AUTH_TOKEN})
 
     assert response.status_code == 200
-    assert response.json()["answer"] == "已取消当前待补充或待确认的操作。"
+    assert response.json()["answer"] == "当前会话没有待取消的操作。"
     assert len(MOCK_TICKETS) == before_count
     assert find_ticket_by_id(1)["status"] == "OPEN"
 

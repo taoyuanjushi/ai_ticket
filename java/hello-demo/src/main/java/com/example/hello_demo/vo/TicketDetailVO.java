@@ -1,7 +1,6 @@
 package com.example.hello_demo.vo;
 
 import com.example.hello_demo.entity.Ticket;
-import com.example.hello_demo.entity.TicketReply;
 
 import java.util.List;
 
@@ -13,12 +12,12 @@ public class TicketDetailVO {
 
     private Ticket ticket;
     private UserInfoVO user;
-    private List<TicketReply> replies;
+    private List<TicketReplyVO> replies;
 
     public TicketDetailVO() {
     }
 
-    public TicketDetailVO(Ticket ticket, UserInfoVO user, List<TicketReply> replies) {
+    public TicketDetailVO(Ticket ticket, UserInfoVO user, List<TicketReplyVO> replies) {
         this.ticket = ticket;
         this.user = user;
         this.replies = replies;
@@ -40,11 +39,11 @@ public class TicketDetailVO {
         this.user = user;
     }
 
-    public List<TicketReply> getReplies() {
+    public List<TicketReplyVO> getReplies() {
         return replies;
     }
 
-    public void setReplies(List<TicketReply> replies) {
+    public void setReplies(List<TicketReplyVO> replies) {
         this.replies = replies;
     }
 }

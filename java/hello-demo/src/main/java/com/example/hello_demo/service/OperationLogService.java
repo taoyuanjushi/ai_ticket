@@ -9,7 +9,6 @@ import com.example.hello_demo.entity.TicketReply;
 import com.example.hello_demo.entity.User;
 import com.example.hello_demo.enums.BusinessType;
 import com.example.hello_demo.enums.OperationType;
-import com.example.hello_demo.enums.UserRole;
 import com.example.hello_demo.exception.BusinessException;
 import com.example.hello_demo.mapper.OperationLogMapper;
 import com.example.hello_demo.mapper.TicketMapper;
@@ -19,13 +18,15 @@ import com.example.hello_demo.security.CurrentUserContext;
 import com.example.hello_demo.security.PermissionUtil;
 import com.example.hello_demo.vo.OperationLogVO;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -34,12 +35,7 @@ import java.util.stream.Collectors;
 public class OperationLogService {
 
     private static final Pattern SENSITIVE_DETAIL_PATTERN = Pattern.compile(
-            "(?i)\\b(authorization|auth_token|token|password)\\s*[:=]\\s*[^,;\\s]+"
-    );
-
-    private static final Set<String> STAFF_VISIBLE_BUSINESS_TYPES = Set.of(
-            BusinessType.TICKET.name(),
-            BusinessType.TICKET_REPLY.name()
+            "(?i)bearer\\s+[^,;\\s]+|\\b(authorization|auth_token|token|password|apikey|api_key|secret)\\b\\s*[:=]\\s*[^,;\\s]+"
     );
 
     private final OperationLogMapper operationLogMapper;
@@ -58,6 +54,7 @@ public class OperationLogService {
         this.userMapper = userMapper;
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(Long userId, String operationType, String businessType, Long businessId, String content) {
         OperationLog log = new OperationLog();
         log.setUserId(userId);
@@ -69,9 +66,43 @@ public class OperationLogService {
         operationLogMapper.insert(log);
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(String operationType, String businessType, Long businessId, String content) {
         Long currentUserId = CurrentUserContext.getUserId();
         record(currentUserId, operationType, businessType, businessId, content);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordAi(
+            String actionType,
+            String businessType,
+            Long businessId,
+            String conversationId,
+            String intent,
+            String toolName,
+            String targetType,
+            Long targetId,
+            String resultStatus,
+            String requestSummary,
+            String resultSummary,
+            Object riskFlags) {
+        record(
+                actionType,
+                businessType,
+                businessId,
+                buildAiContent(
+                        actionType,
+                        conversationId,
+                        intent,
+                        toolName,
+                        targetType,
+                        targetId,
+                        resultStatus,
+                        requestSummary,
+                        resultSummary,
+                        riskFlags
+                )
+        );
     }
 
     public PageResult<OperationLogVO> getTicketLogs(Long ticketId, Long page, Long size) {
@@ -116,6 +147,19 @@ public class OperationLogService {
             Long operatorId,
             String action,
             String businessType) {
+        return getOperationLogs(page, size, ticketId, operatorId, action, businessType, null, null, null);
+    }
+
+    public PageResult<OperationLogVO> getOperationLogs(
+            Long page,
+            Long size,
+            Long ticketId,
+            Long operatorId,
+            String action,
+            String businessType,
+            String operationSource,
+            String resultStatus,
+            String conversationId) {
         PermissionUtil.requireLoginUserId();
         String currentRole = PermissionUtil.requireLoginRole();
         if (!PermissionUtil.canViewGlobalOperationLogs(currentRole)) {
@@ -128,15 +172,15 @@ public class OperationLogService {
         Long normalizedOperatorId = optionalPositiveId(operatorId, "operatorId");
         String normalizedAction = normalizeOperationType(action);
         String normalizedBusinessType = normalizeBusinessType(businessType);
+        String normalizedOperationSource = normalizeOperationSource(operationSource);
+        String normalizedResultStatus = normalizeResultStatus(resultStatus);
+        String normalizedConversationId = trimToNull(conversationId);
 
         List<Long> replyIds = normalizedTicketId == null ? List.of() : findReplyIds(requireExistingTicketId(normalizedTicketId));
 
         Page<OperationLog> pageParam = new Page<>(normalizedPage, normalizedSize);
         LambdaQueryWrapper<OperationLog> wrapper = new LambdaQueryWrapper<>();
 
-        if (UserRole.isStaff(currentRole)) {
-            wrapper.in(OperationLog::getBusinessType, STAFF_VISIBLE_BUSINESS_TYPES);
-        }
         if (normalizedTicketId != null) {
             applyTicketScope(wrapper, normalizedTicketId, replyIds);
         }
@@ -148,6 +192,18 @@ public class OperationLogService {
         }
         if (normalizedBusinessType != null) {
             wrapper.eq(OperationLog::getBusinessType, normalizedBusinessType);
+        }
+        if ("AI".equals(normalizedOperationSource)) {
+            wrapper.likeRight(OperationLog::getOperationType, "AI_");
+        }
+        if ("MANUAL".equals(normalizedOperationSource)) {
+            wrapper.apply("operation_type NOT LIKE {0}", "AI_%");
+        }
+        if (normalizedResultStatus != null) {
+            wrapper.like(OperationLog::getContent, "resultStatus=" + normalizedResultStatus);
+        }
+        if (normalizedConversationId != null) {
+            wrapper.like(OperationLog::getContent, "conversationId=" + normalizedConversationId);
         }
 
         wrapper.orderByDesc(OperationLog::getCreatedAt);
@@ -222,15 +278,27 @@ public class OperationLogService {
         if (ticketId == null && BusinessType.TICKET.name().equals(log.getBusinessType())) {
             ticketId = log.getBusinessId();
         }
-        return new OperationLogVO(
+        String detail = safeDetail(log.getContent());
+        OperationLogVO vo = new OperationLogVO(
                 log.getId(),
                 ticketId,
                 log.getUserId(),
                 operatorName(log.getUserId(), operator),
                 log.getOperationType(),
-                safeDetail(log.getContent()),
+                detail,
                 log.getCreatedAt()
         );
+        vo.setUsername(operator == null ? null : operator.getUsername());
+        vo.setRole(operator == null ? null : operator.getRole());
+        vo.setOperationSource(operationSource(log.getOperationType()));
+        vo.setActionType(log.getOperationType());
+        vo.setConversationId(extractContentValue(detail, "conversationId"));
+        vo.setTargetType(firstNonBlank(extractContentValue(detail, "targetType"), log.getBusinessType()));
+        vo.setTargetId(firstNonNull(parseLong(extractContentValue(detail, "targetId")), log.getBusinessId()));
+        vo.setResultStatus(firstNonBlank(extractContentValue(detail, "resultStatus"), inferResultStatus(log.getOperationType())));
+        vo.setRequestSummary(extractContentValue(detail, "requestSummary"));
+        vo.setResultSummary(firstNonBlank(extractContentValue(detail, "resultSummary"), detail));
+        return vo;
     }
 
     private String operatorName(Long operatorId, User operator) {
@@ -252,6 +320,42 @@ public class OperationLogService {
             return text;
         }
         return text.substring(0, 500);
+    }
+
+    private String buildAiContent(
+            String actionType,
+            String conversationId,
+            String intent,
+            String toolName,
+            String targetType,
+            Long targetId,
+            String resultStatus,
+            String requestSummary,
+            String resultSummary,
+            Object riskFlags) {
+        List<String> parts = new ArrayList<>();
+        addPart(parts, "operationSource", "AI");
+        addPart(parts, "actionType", actionType);
+        addPart(parts, "conversationId", conversationId);
+        addPart(parts, "intent", intent);
+        addPart(parts, "toolName", toolName);
+        addPart(parts, "targetType", targetType);
+        addPart(parts, "targetId", targetId);
+        addPart(parts, "resultStatus", resultStatus == null ? "SUCCESS" : resultStatus);
+        addPart(parts, "requestSummary", safeText(requestSummary, 200));
+        addPart(parts, "resultSummary", safeText(resultSummary, 200));
+        addPart(parts, "riskFlags", safeText(riskFlags == null ? null : String.valueOf(riskFlags), 200));
+        return String.join("; ", parts);
+    }
+
+    private void addPart(List<String> parts, String key, Object value) {
+        if (value == null) {
+            return;
+        }
+        String text = String.valueOf(value).trim();
+        if (!text.isEmpty()) {
+            parts.add(key + "=" + safeText(text, 200));
+        }
     }
 
     private Long normalizePage(Long page) {
@@ -296,7 +400,7 @@ public class OperationLogService {
 
     private String normalizeOperationType(String operationType) {
         String value = trimToNull(operationType);
-        if (value == null) {
+        if (value == null || "ALL".equalsIgnoreCase(value)) {
             return null;
         }
         String normalizedType = OperationType.normalize(value);
@@ -308,7 +412,7 @@ public class OperationLogService {
 
     private String normalizeBusinessType(String businessType) {
         String value = trimToNull(businessType);
-        if (value == null) {
+        if (value == null || "ALL".equalsIgnoreCase(value)) {
             return null;
         }
         String normalizedType = BusinessType.normalize(value);
@@ -316,6 +420,30 @@ public class OperationLogService {
             throw new BusinessException(400, "businessType不合法");
         }
         return normalizedType;
+    }
+
+    private String normalizeOperationSource(String operationSource) {
+        String value = trimToNull(operationSource);
+        if (value == null || "ALL".equalsIgnoreCase(value)) {
+            return null;
+        }
+        String normalized = value.toUpperCase();
+        if (!"AI".equals(normalized) && !"MANUAL".equals(normalized)) {
+            throw new BusinessException(400, "operationSource不合法");
+        }
+        return normalized;
+    }
+
+    private String normalizeResultStatus(String resultStatus) {
+        String value = trimToNull(resultStatus);
+        if (value == null || "ALL".equalsIgnoreCase(value)) {
+            return null;
+        }
+        String normalized = value.toUpperCase();
+        if (!List.of("SUCCESS", "FAILED", "CANCELLED", "FORBIDDEN").contains(normalized)) {
+            throw new BusinessException(400, "resultStatus不合法");
+        }
+        return normalized;
     }
 
     private String requireOperationType(String operationType) {
@@ -347,5 +475,71 @@ public class OperationLogService {
             return null;
         }
         return value.trim();
+    }
+
+    private String operationSource(String operationType) {
+        return operationType != null && operationType.startsWith("AI_") ? "AI" : "MANUAL";
+    }
+
+    private String inferResultStatus(String operationType) {
+        if (operationType == null) {
+            return "SUCCESS";
+        }
+        if (operationType.endsWith("_CANCELLED") || OperationType.AI_WRITE_CANCELLED.name().equals(operationType)
+                || OperationType.AI_ACTION_CANCELLED.name().equals(operationType)) {
+            return "CANCELLED";
+        }
+        if (OperationType.AI_FORBIDDEN.name().equals(operationType)) {
+            return "FORBIDDEN";
+        }
+        if (OperationType.AI_ERROR.name().equals(operationType)
+                || OperationType.AI_ACTION_CONFIRM_FAILED.name().equals(operationType)) {
+            return "FAILED";
+        }
+        return "SUCCESS";
+    }
+
+    private String extractContentValue(String content, String key) {
+        if (content == null || key == null) {
+            return null;
+        }
+        String prefix = key + "=";
+        for (String part : content.split(";")) {
+            String text = part.trim();
+            if (text.startsWith(prefix)) {
+                return trimToNull(text.substring(prefix.length()));
+            }
+        }
+        return null;
+    }
+
+    private Long parseLong(String value) {
+        String text = trimToNull(value);
+        if (text == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(text);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private String firstNonBlank(String first, String second) {
+        String value = trimToNull(first);
+        return value == null ? trimToNull(second) : value;
+    }
+
+    private Long firstNonNull(Long first, Long second) {
+        return first == null ? second : first;
+    }
+
+    private String safeText(String text, int maxLength) {
+        String value = trimToNull(text);
+        if (value == null) {
+            return null;
+        }
+        value = SENSITIVE_DETAIL_PATTERN.matcher(value).replaceAll("[SENSITIVE]");
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
     }
 }

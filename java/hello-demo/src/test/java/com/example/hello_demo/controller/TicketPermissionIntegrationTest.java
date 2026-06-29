@@ -1,7 +1,10 @@
 package com.example.hello_demo.controller;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.example.hello_demo.entity.Ticket;
 import com.example.hello_demo.entity.TicketReply;
+import com.example.hello_demo.entity.User;
 import com.example.hello_demo.mapper.TicketMapper;
 import com.example.hello_demo.mapper.TicketReplyMapper;
 import com.example.hello_demo.mapper.UserMapper;
@@ -11,12 +14,16 @@ import com.example.hello_demo.service.TicketCacheService;
 import com.example.hello_demo.service.TicketService;
 import com.example.hello_demo.service.TicketStatusTransitionPolicy;
 import com.example.hello_demo.vo.TicketDetailVO;
+import com.example.hello_demo.vo.TicketReplyVO;
 import com.example.hello_demo.vo.UserInfoVO;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.hamcrest.Matchers.containsString;
@@ -42,6 +49,14 @@ class TicketPermissionIntegrationTest extends MockMvcIntegrationTestSupport {
     private OperationLogService operationLogService;
     private TicketCacheService ticketCacheService;
     private MockMvc mockMvc;
+
+    @BeforeAll
+    static void initMybatisPlusTableInfo() {
+        if (TableInfoHelper.getTableInfo(TicketReply.class) == null) {
+            MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
+            TableInfoHelper.initTableInfo(assistant, TicketReply.class);
+        }
+    }
 
     @BeforeEach
     void setUp() {
@@ -124,6 +139,47 @@ class TicketPermissionIntegrationTest extends MockMvcIntegrationTestSupport {
         verify(ticketReplyMapper, never()).selectList(any());
     }
 
+    @Test
+    void ticketDetailReturnsReplyContractInCreatedAtOrder() throws Exception {
+        Ticket ticket = ticket(1L, 1L, "tom ticket", "tom ticket detail");
+        User owner = user(1L, "tom", "Tom User", "USER");
+        User staff = user(3L, "staff", "Staff User", "STAFF");
+        TicketReply first = ticketReply(
+                11L,
+                1L,
+                1L,
+                "user reply",
+                "USER",
+                LocalDateTime.of(2026, 1, 1, 10, 0)
+        );
+        TicketReply second = ticketReply(
+                12L,
+                1L,
+                3L,
+                "staff reply",
+                "STAFF",
+                LocalDateTime.of(2026, 1, 1, 10, 5)
+        );
+
+        when(ticketMapper.selectById(1L)).thenReturn(ticket);
+        when(userMapper.selectById(1L)).thenReturn(owner);
+        when(ticketReplyMapper.selectList(any())).thenReturn(List.of(first, second));
+        when(userMapper.selectBatchIds(any())).thenReturn(List.of(owner, staff));
+
+        mockMvc.perform(get("/tickets/1/detail")
+                        .header("Authorization", tomToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.replies[0].authorName").value("Tom User"))
+                .andExpect(jsonPath("$.data.replies[0].authorRole").value("USER"))
+                .andExpect(jsonPath("$.data.replies[0].replyType").value("USER"))
+                .andExpect(jsonPath("$.data.replies[0].createdAt").value("2026-01-01T10:00:00"))
+                .andExpect(jsonPath("$.data.replies[1].authorName").value("Staff User"))
+                .andExpect(jsonPath("$.data.replies[1].authorRole").value("STAFF"))
+                .andExpect(jsonPath("$.data.replies[1].replyType").value("STAFF"))
+                .andExpect(jsonPath("$.data.replies[1].createdAt").value("2026-01-01T10:05:00"));
+    }
+
     private Ticket ticket(Long id, Long userId, String title, String content) {
         Ticket ticket = new Ticket();
         ticket.setId(id);
@@ -135,12 +191,30 @@ class TicketPermissionIntegrationTest extends MockMvcIntegrationTestSupport {
         return ticket;
     }
 
-    private TicketReply reply(Long ticketId, String content) {
-        TicketReply reply = new TicketReply();
-        reply.setId(20L + ticketId);
-        reply.setTicketId(ticketId);
-        reply.setContent(content);
-        reply.setReplyType("STAFF");
-        return reply;
+    private TicketReplyVO reply(Long ticketId, String content) {
+        return new TicketReplyVO(
+                20L + ticketId,
+                ticketId,
+                2L,
+                "Staff User",
+                "STAFF",
+                content,
+                "STAFF",
+                null,
+                null
+        );
+    }
+
+    private TicketReply ticketReply(Long id, Long ticketId, Long userId, String content, String replyType, LocalDateTime createdAt) {
+        return new TicketReply(id, ticketId, userId, content, replyType, createdAt);
+    }
+
+    private User user(Long id, String username, String name, String role) {
+        User user = new User();
+        user.setId(id);
+        user.setUsername(username);
+        user.setName(name);
+        user.setRole(role);
+        return user;
     }
 }

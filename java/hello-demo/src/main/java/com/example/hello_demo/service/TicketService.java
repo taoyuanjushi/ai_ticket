@@ -22,12 +22,17 @@ import com.example.hello_demo.mapper.TicketReplyMapper;
 import com.example.hello_demo.mapper.UserMapper;
 import com.example.hello_demo.security.PermissionUtil;
 import com.example.hello_demo.vo.TicketDetailVO;
+import com.example.hello_demo.vo.TicketReplyVO;
 import com.example.hello_demo.vo.UserInfoVO;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * 工单业务逻辑层。
@@ -182,7 +187,7 @@ public class TicketService {
         wrapper.eq(TicketReply::getTicketId, id);
         wrapper.orderByAsc(TicketReply::getCreatedAt);
 
-        List<TicketReply> replies = ticketReplyMapper.selectList(wrapper);
+        List<TicketReplyVO> replies = toTicketReplyVOs(ticketReplyMapper.selectList(wrapper));
         TicketDetailVO ticketDetailVO = new TicketDetailVO(ticket, toUserInfoVO(user), replies);
         ticketCacheService.setTicketDetail(id, ticketDetailVO);
 
@@ -376,6 +381,56 @@ public class TicketService {
                 user.getEmail(),
                 user.getRole()
         );
+    }
+
+    private List<TicketReplyVO> toTicketReplyVOs(List<TicketReply> replies) {
+        if (replies == null || replies.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, User> users = findReplyAuthors(replies);
+        return replies.stream()
+                .map(reply -> toTicketReplyVO(reply, users.get(reply.getUserId())))
+                .toList();
+    }
+
+    private Map<Long, User> findReplyAuthors(List<TicketReply> replies) {
+        List<Long> userIds = replies.stream()
+                .map(TicketReply::getUserId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (userIds.isEmpty()) {
+            return Map.of();
+        }
+
+        List<User> users = userMapper.selectBatchIds(userIds);
+        if (users == null || users.isEmpty()) {
+            return Map.of();
+        }
+        return users.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toMap(User::getId, Function.identity(), (first, ignored) -> first));
+    }
+
+    private TicketReplyVO toTicketReplyVO(TicketReply reply, User author) {
+        return new TicketReplyVO(
+                reply.getId(),
+                reply.getTicketId(),
+                reply.getUserId(),
+                authorName(reply.getUserId(), author),
+                author == null ? null : author.getRole(),
+                reply.getContent(),
+                reply.getReplyType(),
+                reply.getCreatedAt(),
+                reply.getUpdatedAt()
+        );
+    }
+
+    private String authorName(Long userId, User author) {
+        if (author == null) {
+            return userId == null ? null : "用户#" + userId;
+        }
+        return displayValue(author.getName(), displayValue(author.getUsername(), "用户#" + userId));
     }
 
     private void checkTicketReadable(Ticket ticket) {

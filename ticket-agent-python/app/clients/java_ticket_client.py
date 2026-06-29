@@ -11,11 +11,9 @@ from app.schemas.pending_action import (
     CreateAiPendingActionRequest,
 )
 from app.schemas.ticket import (
-    AiReplySaveRequest,
     CreateTicketRequest,
     TicketDTO,
     TicketDetailDTO,
-    TicketReplyDTO,
     UpdateTicketStatusRequest,
 )
 
@@ -167,20 +165,6 @@ class JavaTicketClient:
             json=req.to_java_body(),
         )
         return TicketDTO.model_validate(data)
-
-    def save_ai_reply(
-        self,
-        auth_token: str,
-        ticket_id: int,
-        req: AiReplySaveRequest,
-    ) -> TicketReplyDTO:
-        data = self._request(
-            "POST",
-            f"/tickets/{ticket_id}/ai-replies",
-            auth_token=auth_token,
-            json=req.to_java_body(),
-        )
-        return TicketReplyDTO.model_validate(data)
 
     def create_pending_action(
         self,

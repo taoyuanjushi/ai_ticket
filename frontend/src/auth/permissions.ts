@@ -49,6 +49,10 @@ export function canDeleteTicket(role?: UserRole | string | null): boolean {
 }
 
 export function canViewOperationLogs(role?: UserRole | string | null): boolean {
+  return isAdmin(role);
+}
+
+export function canViewTicketLogs(role?: UserRole | string | null): boolean {
   return isStaff(role);
 }
 

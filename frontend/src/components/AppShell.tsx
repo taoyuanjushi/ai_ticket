@@ -1,5 +1,6 @@
 import {
   Activity,
+  LayoutDashboard,
   LogOut,
   Menu,
   MessageSquare,
@@ -46,6 +47,7 @@ export function AppShell() {
             <NavItem to="/" icon={Ticket} label={t("nav.ticketDesk")} />
             {canCreateTicket(role) ? <NavItem to="/tickets/new" icon={Plus} label={t("nav.createTicket")} /> : null}
             <NavItem to="/ai" icon={MessageSquare} label={t("nav.aiAssistant")} />
+            {canViewAdminArea(role) ? <NavItem to="/admin/dashboard" icon={LayoutDashboard} label={t("nav.dashboard")} /> : null}
             {canViewAdminArea(role) ? <NavItem to="/users" icon={Users} label={t("nav.users")} /> : null}
             {canViewOperationLogs(role) ? <NavItem to="/logs" icon={Activity} label={t("nav.operationLogs")} /> : null}
             {canViewAdminArea(role) ? <NavItem to="/settings" icon={Shield} label={t("nav.system")} /> : null}

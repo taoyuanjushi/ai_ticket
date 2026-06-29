@@ -43,13 +43,16 @@ def test_agent_chat_ai_capabilities_use_agent_response_contract(
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"answer", "type", "message", "data", "risk_flags"}
+    assert {"answer", "type", "message", "data", "risk_flags"}.issubset(body.keys())
     assert body["type"] == "JSON_RESULT"
     assert body["message"] == expected_message
     assert body["answer"] == expected_message
     assert isinstance(body["data"], dict)
     assert set(body["data"].keys()) == expected_data_keys
     assert isinstance(body["risk_flags"], list)
+    assert body["targetType"] == "TICKET"
+    assert body["targetId"] == 1
+    assert body["requiresConfirmation"] is False
 
 
 def test_response_builder_merges_outer_and_data_risk_flags() -> None:

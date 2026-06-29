@@ -2,6 +2,7 @@ import type {
   AiChatResponse,
   BusinessType,
   CurrentUser,
+  DashboardStats,
   LoginResponse,
   OperationLog,
   OperationType,
@@ -238,6 +239,10 @@ export async function mockFetch<T>(path: string, options: MockOptions = {}): Pro
     return listLogs(options.query ?? {}) as T;
   }
 
+  if (route === "/admin/dashboard/stats" && method === "GET") {
+    return buildDashboardStats() as T;
+  }
+
   const ticketLogsMatch = route.match(/^\/tickets\/(\d+)\/logs$/);
   if (ticketLogsMatch && method === "GET") {
     return listLogs({ ...(options.query ?? {}), ticketId: Number(ticketLogsMatch[1]) }) as T;
@@ -306,6 +311,23 @@ function listLogs(query: Record<string, string | number | undefined | null>): Pa
   if (query.action) result = result.filter((log) => log.action === query.action);
   const start = (page - 1) * size;
   return { records: result.slice(start, start + size), total: result.length, page, size };
+}
+
+function buildDashboardStats(): DashboardStats {
+  const aiSuggestionCount = logs.filter((log) => log.action === "AI_REPLY_SUGGESTION").length;
+  const aiAcceptedCount = logs.filter((log) => log.action === "AI_REPLY_CONFIRMED").length;
+  return {
+    ticketTotal: tickets.length,
+    pendingCount: tickets.filter((ticket) => ticket.status === "OPEN").length,
+    processingCount: tickets.filter((ticket) => ticket.status === "PROCESSING").length,
+    doneCount: 0,
+    closedCount: tickets.filter((ticket) => ticket.status === "CLOSED").length,
+    highPriorityCount: tickets.filter((ticket) => ticket.priority === "HIGH").length,
+    urgentPriorityCount: tickets.filter((ticket) => ticket.priority === "URGENT").length,
+    aiSuggestionCount,
+    aiAcceptedCount,
+    aiAcceptanceRate: aiSuggestionCount === 0 ? 0 : aiAcceptedCount / aiSuggestionCount,
+  };
 }
 
 function getTicketDetail(id: number): TicketDetail {
@@ -419,7 +441,18 @@ function makeTicket(id: number, title: string, content: string, status: TicketSt
 
 function makeReply(id: number, ticketId: number, userId: number, content: string, replyType: "USER" | "STAFF" | "AI", offsetMinutes: number): TicketReply {
   const timestamp = time(offsetMinutes);
-  return { id, ticketId, userId, content, replyType, createdAt: timestamp, updatedAt: timestamp };
+  const author = users.find((user) => user.id === userId);
+  return {
+    id,
+    ticketId,
+    userId,
+    authorName: author?.name ?? `user#${userId}`,
+    authorRole: author?.role ?? null,
+    content,
+    replyType,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
 }
 
 function makeLog(

@@ -4,6 +4,7 @@ import com.example.hello_demo.client.AiClient;
 import com.example.hello_demo.dto.PythonAgentChatRequestDTO;
 import com.example.hello_demo.enums.BusinessType;
 import com.example.hello_demo.enums.OperationType;
+import com.example.hello_demo.exception.BusinessException;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
@@ -24,51 +25,137 @@ public class AiService {
     }
 
     public Map<String, Object> chat(PythonAgentChatRequestDTO requestDTO) {
-        Map<String, Object> response = aiClient.chat(requestDTO);
-        recordChatAudit(requestDTO, response);
-        return response;
+        try {
+            Map<String, Object> response = aiClient.chat(requestDTO);
+            recordChatAudit(requestDTO, response);
+            return response;
+        } catch (BusinessException e) {
+            recordChatFailure(requestDTO, e);
+            throw e;
+        }
     }
 
     public Map<String, Object> generateReplySuggestion(Long ticketId, String authToken) {
-        Map<String, Object> response = aiClient.generateReplySuggestion(ticketId, authToken);
-        operationLogService.record(
-                OperationType.AI_REPLY_SUGGESTED.name(),
-                BusinessType.TICKET.name(),
-                ticketId,
-                "生成 AI 回复建议"
-        );
-        return response;
+        try {
+            Map<String, Object> response = aiClient.generateReplySuggestion(ticketId, authToken);
+            operationLogService.recordAi(
+                    OperationType.AI_REPLY_SUGGESTION.name(),
+                    BusinessType.TICKET.name(),
+                    ticketId,
+                    null,
+                    "GENERATE_REPLY_SUGGESTION",
+                    "generate_reply_suggestion",
+                    BusinessType.TICKET.name(),
+                    ticketId,
+                    "SUCCESS",
+                    null,
+                    "生成 AI 回复建议",
+                    response.get("risk_flags")
+            );
+            return response;
+        } catch (BusinessException e) {
+            operationLogService.recordAi(
+                    e.getCode() == 403 ? OperationType.AI_FORBIDDEN.name() : OperationType.AI_ERROR.name(),
+                    BusinessType.TICKET.name(),
+                    ticketId,
+                    null,
+                    "GENERATE_REPLY_SUGGESTION",
+                    "generate_reply_suggestion",
+                    BusinessType.TICKET.name(),
+                    ticketId,
+                    e.getCode() == 403 ? "FORBIDDEN" : "FAILED",
+                    null,
+                    e.getMessage(),
+                    null
+            );
+            throw e;
+        }
     }
 
     private void recordChatAudit(PythonAgentChatRequestDTO requestDTO, Map<String, Object> response) {
-        String message = requestDTO.getMessage();
+        String actionType = firstString(response, "actionType");
+        if (actionType == null) {
+            actionType = fallbackActionType(response, requestDTO.getMessage());
+        }
+        if (actionType == null) {
+            return;
+        }
+
+        String resultStatus = resultStatus(response);
+        Long targetId = longValue(response.get("targetId"));
+        String targetType = firstString(response, "targetType");
+        String businessType = BusinessType.TICKET.name().equals(targetType)
+                || OperationType.AI_QUERY_TICKET.name().equals(actionType)
+                ? BusinessType.TICKET.name()
+                : BusinessType.AI_PENDING_ACTION.name();
+
+        operationLogService.recordAi(
+                actionType,
+                businessType,
+                targetId,
+                requestDTO.getConversation_id(),
+                firstString(response, "intent"),
+                firstString(response, "toolName"),
+                targetType,
+                targetId,
+                resultStatus,
+                requestDTO.getMessage(),
+                firstString(response, "message", "answer", "error"),
+                response.get("risk_flags")
+        );
+    }
+
+    private void recordChatFailure(PythonAgentChatRequestDTO requestDTO, BusinessException e) {
+        int code = e.getCode();
+        boolean forbidden = code == 403 || code == 404;
+        operationLogService.recordAi(
+                forbidden ? OperationType.AI_FORBIDDEN.name() : OperationType.AI_ERROR.name(),
+                BusinessType.TICKET.name(),
+                null,
+                requestDTO.getConversation_id(),
+                "UNKNOWN",
+                null,
+                BusinessType.TICKET.name(),
+                null,
+                forbidden ? "FORBIDDEN" : "FAILED",
+                requestDTO.getMessage(),
+                e.getMessage(),
+                null
+        );
+    }
+
+    private String fallbackActionType(Map<String, Object> response, String message) {
+        String type = firstString(response, "type");
+        if ("FORBIDDEN".equals(type)) {
+            return OperationType.AI_FORBIDDEN.name();
+        }
+        if ("ERROR".equals(type) || "UNAUTHORIZED".equals(type)) {
+            return OperationType.AI_ERROR.name();
+        }
+        if ("PENDING_CONFIRMATION".equals(type)) {
+            Object data = response.get("data");
+            String pendingType = data instanceof Map<?, ?> map ? stringValue(map.get("actionType")) : null;
+            if ("CREATE_TICKET".equals(pendingType)) {
+                return OperationType.AI_CREATE_TICKET_PENDING.name();
+            }
+            if ("UPDATE_TICKET_STATUS".equals(pendingType)) {
+                return OperationType.AI_UPDATE_STATUS_PENDING.name();
+            }
+            if ("SAVE_AI_REPLY".equals(pendingType)) {
+                return OperationType.AI_REPLY_PENDING.name();
+            }
+        }
         String answer = extractAnswer(response);
         if (isConfirmMessage(message) && isSuccessfulConfirmedWriteAnswer(answer)) {
-            operationLogService.record(
-                    OperationType.AI_WRITE_CONFIRMED.name(),
-                    BusinessType.TICKET.name(),
-                    null,
-                    "确认执行 AI 写操作，conversationId=" + safeText(requestDTO.getConversation_id(), 80)
-            );
-            return;
+            return OperationType.AI_WRITE_CONFIRMED.name();
         }
         if (isCancelMessage(message) && isSuccessfulCancelledWriteAnswer(answer)) {
-            operationLogService.record(
-                    OperationType.AI_WRITE_CANCELLED.name(),
-                    BusinessType.TICKET.name(),
-                    null,
-                    "取消 AI 写操作，conversationId=" + safeText(requestDTO.getConversation_id(), 80)
-            );
-            return;
+            return OperationType.AI_WRITE_CANCELLED.name();
         }
         if (isTicketQuery(message)) {
-            operationLogService.record(
-                    OperationType.AI_TICKET_QUERY.name(),
-                    BusinessType.TICKET.name(),
-                    null,
-                    "AI 查询工单：" + safeText(message, 200)
-            );
+            return OperationType.AI_QUERY_TICKET.name();
         }
+        return null;
     }
 
     private String extractAnswer(Map<String, Object> response) {
@@ -128,5 +215,48 @@ public class AiService {
             return normalized;
         }
         return normalized.substring(0, maxLength);
+    }
+
+    private String resultStatus(Map<String, Object> response) {
+        String type = firstString(response, "type");
+        if ("FORBIDDEN".equals(type)) {
+            return "FORBIDDEN";
+        }
+        if ("ERROR".equals(type) || "UNAUTHORIZED".equals(type)) {
+            return "FAILED";
+        }
+        return "SUCCESS";
+    }
+
+    private String firstString(Map<String, Object> response, String... keys) {
+        for (String key : keys) {
+            String value = stringValue(response.get(key));
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String stringValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : safeText(text, 200);
+    }
+
+    private Long longValue(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return Long.valueOf(text.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 }

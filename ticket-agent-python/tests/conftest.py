@@ -12,7 +12,6 @@ from app.schemas.pending_action import (
 )
 from app.schemas.ticket import (
     CreateTicketRequest,
-    TicketReplyDTO,
     TicketDTO,
     TicketDetailDTO,
     UpdateTicketStatusRequest,
@@ -160,25 +159,6 @@ class FakeJavaTicketClient:
 
         ticket["status"] = status
         return TicketDTO.model_validate(self._to_java_ticket(ticket))
-
-    def save_ai_reply(
-        self,
-        auth_token: str | None,
-        ticket_id: int,
-        req: Any,
-    ) -> TicketReplyDTO:
-        self.seen_tokens.append(auth_token)
-        if self._find(ticket_id) is None:
-            raise JavaApiError(404, "目标工单不存在，或你无权访问该工单。")
-        return TicketReplyDTO.model_validate(
-            {
-                "id": 100 + ticket_id,
-                "ticketId": ticket_id,
-                "userId": 2,
-                "content": req.content,
-                "replyType": "AI",
-            }
-        )
 
     def create_pending_action(
         self,

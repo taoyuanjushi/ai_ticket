@@ -1,9 +1,12 @@
 package com.example.hello_demo.service;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.hello_demo.dto.TicketAssigneeUpdateRequest;
 import com.example.hello_demo.dto.TicketCategoryUpdateRequest;
 import com.example.hello_demo.entity.Ticket;
+import com.example.hello_demo.entity.TicketReply;
 import com.example.hello_demo.entity.User;
 import com.example.hello_demo.enums.OperationType;
 import com.example.hello_demo.enums.TicketStatus;
@@ -15,7 +18,9 @@ import com.example.hello_demo.mapper.UserMapper;
 import com.example.hello_demo.security.CurrentUserContext;
 import com.example.hello_demo.vo.TicketDetailVO;
 import com.example.hello_demo.vo.UserInfoVO;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -36,6 +41,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class TicketServiceCacheSecurityTest {
+
+    @BeforeAll
+    static void initMybatisPlusTableInfo() {
+        if (TableInfoHelper.getTableInfo(Ticket.class) == null) {
+            MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
+            TableInfoHelper.initTableInfo(assistant, Ticket.class);
+        }
+    }
 
     @AfterEach
     void clearContext() {
@@ -249,6 +262,38 @@ class TicketServiceCacheSecurityTest {
 
         assertEquals("账号登录", result.getTicket().getCategory());
         assertEquals(2L, result.getTicket().getAssignedTo());
+    }
+
+    @Test
+    void ticketDetailReturnsReplyAuthorDisplayFields() {
+        TicketMapper ticketMapper = mock(TicketMapper.class);
+        UserMapper userMapper = mock(UserMapper.class);
+        TicketReplyMapper ticketReplyMapper = mock(TicketReplyMapper.class);
+        TicketCacheService ticketCacheService = mock(TicketCacheService.class);
+        TicketReply reply = new TicketReply();
+        reply.setId(10L);
+        reply.setTicketId(1L);
+        reply.setUserId(2L);
+        reply.setContent("Please provide more detail");
+        reply.setReplyType("STAFF");
+        when(ticketMapper.selectById(1L)).thenReturn(ticket(1L, 7L));
+        when(userMapper.selectById(7L)).thenReturn(user(7L));
+        when(ticketReplyMapper.selectList(any())).thenReturn(List.of(reply));
+        when(userMapper.selectBatchIds(any())).thenReturn(List.of(user(2L, "STAFF")));
+        TicketService ticketService = new TicketService(
+                ticketMapper,
+                userMapper,
+                ticketReplyMapper,
+                mock(OperationLogService.class),
+                ticketCacheService,
+                new TicketStatusTransitionPolicy()
+        );
+        CurrentUserContext.set(3L, "staff", "STAFF");
+
+        TicketDetailVO result = ticketService.getTicketDetail(1L);
+
+        assertEquals("user-2", result.getReplies().get(0).authorName());
+        assertEquals("STAFF", result.getReplies().get(0).authorRole());
     }
 
     @Test

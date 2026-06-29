@@ -32,17 +32,31 @@ public class OperationLogController {
             @RequestParam(required = false) String action,
             @RequestParam(required = false) Long userId,
             @RequestParam(required = false) String operationType,
-            @RequestParam(required = false) String businessType) {
+            @RequestParam(required = false) String actionType,
+            @RequestParam(required = false) String businessType,
+            @RequestParam(required = false) String operationSource,
+            @RequestParam(required = false) String resultStatus,
+            @RequestParam(required = false) String conversationId) {
 
         Long normalizedOperatorId = operatorId == null ? userId : operatorId;
-        String normalizedAction = action == null ? operationType : action;
+        String normalizedAction = action == null ? firstNonBlank(operationType, actionType) : action;
         return Result.success(operationLogService.getOperationLogs(
                 page,
                 size,
                 ticketId,
                 normalizedOperatorId,
                 normalizedAction,
-                businessType
+                businessType,
+                operationSource,
+                resultStatus,
+                conversationId
         ));
+    }
+
+    private String firstNonBlank(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        return second;
     }
 }

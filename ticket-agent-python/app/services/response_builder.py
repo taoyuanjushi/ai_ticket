@@ -9,6 +9,7 @@ class ResponseBuilder:
         message: str,
         data: Any,
         risk_flags: list[str] | None = None,
+        **audit: Any,
     ) -> AgentResponse:
         payload = ResponseBuilder._to_payload(data)
         data_risk_flags = []
@@ -25,17 +26,19 @@ class ResponseBuilder:
                 risk_flags or [],
                 data_risk_flags,
             ),
+            **audit,
         )
 
     @staticmethod
-    def normal(message: str) -> AgentResponse:
-        return AgentResponse(type="NORMAL", message=message)
+    def normal(message: str, **audit: Any) -> AgentResponse:
+        return AgentResponse(type="NORMAL", message=message, **audit)
 
     @staticmethod
     def missing_fields(
         message: str,
         missing_fields: list[str],
         collected: dict[str, Any] | None = None,
+        **audit: Any,
     ) -> AgentResponse:
         return AgentResponse(
             type="MISSING_FIELDS",
@@ -44,6 +47,7 @@ class ResponseBuilder:
                 "missing_fields": list(missing_fields),
                 "collected": collected or {},
             },
+            **audit,
         )
 
     @staticmethod
@@ -52,6 +56,7 @@ class ResponseBuilder:
         action_type: str,
         payload: dict[str, Any],
         ticket_id: int | None = None,
+        **audit: Any,
     ) -> AgentResponse:
         data: dict[str, Any] = {
             "actionType": action_type,
@@ -63,30 +68,34 @@ class ResponseBuilder:
             type="PENDING_CONFIRMATION",
             message=message,
             data=data,
+            **audit,
         )
 
     @staticmethod
-    def unauthorized(message: str = "登录状态已失效，请重新登录。") -> AgentResponse:
-        return AgentResponse(type="UNAUTHORIZED", message=message)
+    def unauthorized(message: str = "登录状态已失效，请重新登录。", **audit: Any) -> AgentResponse:
+        return AgentResponse(type="UNAUTHORIZED", message=message, error=message, **audit)
 
     @staticmethod
-    def forbidden(message: str = "你没有权限执行该操作。") -> AgentResponse:
-        return AgentResponse(type="FORBIDDEN", message=message)
+    def forbidden(message: str = "你没有权限执行该操作。", **audit: Any) -> AgentResponse:
+        return AgentResponse(type="FORBIDDEN", message=message, error=message, **audit)
 
     @staticmethod
     def error(
         message: str,
         risk_flags: list[str] | None = None,
+        **audit: Any,
     ) -> AgentResponse:
         return AgentResponse(
             type="ERROR",
             message=message,
             risk_flags=risk_flags or [],
+            error=message,
+            **audit,
         )
 
     @staticmethod
-    def unknown_intent(message: str) -> AgentResponse:
-        return AgentResponse(type="UNKNOWN_INTENT", message=message)
+    def unknown_intent(message: str, **audit: Any) -> AgentResponse:
+        return AgentResponse(type="UNKNOWN_INTENT", message=message, **audit)
 
     @staticmethod
     def from_status_error(
@@ -95,10 +104,10 @@ class ResponseBuilder:
         risk_flags: list[str] | None = None,
     ) -> AgentResponse:
         if status_code == 401:
-            return ResponseBuilder.unauthorized(message)
+            return ResponseBuilder.unauthorized(message, actionType="AI_ERROR", riskLevel="UNKNOWN", requiresConfirmation=False)
         if status_code in (403, 404):
-            return ResponseBuilder.forbidden(message)
-        return ResponseBuilder.error(message, risk_flags=risk_flags)
+            return ResponseBuilder.forbidden(message, actionType="AI_FORBIDDEN", riskLevel="UNKNOWN", requiresConfirmation=False)
+        return ResponseBuilder.error(message, risk_flags=risk_flags, actionType="AI_ERROR", riskLevel="UNKNOWN", requiresConfirmation=False)
 
     @staticmethod
     def _to_payload(data: Any) -> Any:

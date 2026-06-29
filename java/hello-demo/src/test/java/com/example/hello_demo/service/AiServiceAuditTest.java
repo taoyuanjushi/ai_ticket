@@ -11,6 +11,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -44,11 +45,19 @@ class AiServiceAuditTest {
         Map<String, Object> response = aiService.chat(request);
 
         assertEquals("共找到 1 个工单", response.get("answer"));
-        verify(operationLogService).record(
-                eq(OperationType.AI_TICKET_QUERY.name()),
+        verify(operationLogService).recordAi(
+                eq(OperationType.AI_QUERY_TICKET.name()),
                 eq(BusinessType.TICKET.name()),
                 isNull(),
-                contains("查询我的工单")
+                eq("chat-1"),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                eq("SUCCESS"),
+                eq("查询我的工单"),
+                eq("共找到 1 个工单"),
+                any()
         );
     }
 
@@ -64,11 +73,19 @@ class AiServiceAuditTest {
 
         aiService.chat(request);
 
-        verify(operationLogService).record(
+        verify(operationLogService).recordAi(
                 eq(OperationType.AI_WRITE_CONFIRMED.name()),
-                eq(BusinessType.TICKET.name()),
+                eq(BusinessType.AI_PENDING_ACTION.name()),
                 isNull(),
-                contains("chat-2")
+                eq("chat-2"),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                eq("SUCCESS"),
+                eq("确认"),
+                contains("已创建工单"),
+                any()
         );
     }
 
@@ -84,11 +101,19 @@ class AiServiceAuditTest {
 
         aiService.chat(request);
 
-        verify(operationLogService, never()).record(
+        verify(operationLogService, never()).recordAi(
                 eq(OperationType.AI_WRITE_CONFIRMED.name()),
-                eq(BusinessType.TICKET.name()),
+                eq(BusinessType.AI_PENDING_ACTION.name()),
                 isNull(),
-                contains("chat-3")
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any()
         );
     }
 
@@ -104,11 +129,19 @@ class AiServiceAuditTest {
 
         aiService.chat(request);
 
-        verify(operationLogService, never()).record(
+        verify(operationLogService, never()).recordAi(
                 eq(OperationType.AI_WRITE_CONFIRMED.name()),
-                eq(BusinessType.TICKET.name()),
+                eq(BusinessType.AI_PENDING_ACTION.name()),
                 isNull(),
-                contains("chat-token-expired")
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any()
         );
     }
 
@@ -124,11 +157,19 @@ class AiServiceAuditTest {
 
         aiService.chat(request);
 
-        verify(operationLogService).record(
+        verify(operationLogService).recordAi(
                 eq(OperationType.AI_WRITE_CANCELLED.name()),
-                eq(BusinessType.TICKET.name()),
+                eq(BusinessType.AI_PENDING_ACTION.name()),
                 isNull(),
-                contains("chat-4")
+                eq("chat-4"),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                eq("SUCCESS"),
+                eq("取消"),
+                contains("已取消"),
+                any()
         );
     }
 
@@ -140,11 +181,19 @@ class AiServiceAuditTest {
         Map<String, Object> response = aiService.generateReplySuggestion(3L, "Bearer token");
 
         assertEquals(aiResponse, response);
-        verify(operationLogService).record(
-                eq(OperationType.AI_REPLY_SUGGESTED.name()),
+        verify(operationLogService).recordAi(
+                eq(OperationType.AI_REPLY_SUGGESTION.name()),
                 eq(BusinessType.TICKET.name()),
                 eq(3L),
-                eq("生成 AI 回复建议")
+                isNull(),
+                eq("GENERATE_REPLY_SUGGESTION"),
+                eq("generate_reply_suggestion"),
+                eq(BusinessType.TICKET.name()),
+                eq(3L),
+                eq("SUCCESS"),
+                isNull(),
+                eq("生成 AI 回复建议"),
+                any()
         );
     }
 }

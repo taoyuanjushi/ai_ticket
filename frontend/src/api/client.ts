@@ -2,6 +2,7 @@ import { request } from "./http";
 import type {
   AiChatResponse,
   CurrentUser,
+  DashboardStats,
   LoginResponse,
   OperationLog,
   PageResult,
@@ -81,10 +82,16 @@ export const api = {
     ticketId?: number | string;
     operatorId?: number | string;
     action?: string;
+    operationSource?: string;
+    actionType?: string;
+    resultStatus?: string;
+    conversationId?: string;
   }) => request<PageResult<OperationLog>>("/operation-logs", { query }),
 
   getTicketLogs: (ticketId: number, query: { page?: number; size?: number }) =>
     request<PageResult<OperationLog>>(`/tickets/${ticketId}/logs`, { query }),
+
+  getDashboardStats: () => request<DashboardStats>("/admin/dashboard/stats"),
 
   aiChat: (message: string, conversationId: string) =>
     request<AiChatResponse>("/ai/chat", { method: "POST", body: { message, conversationId } }),

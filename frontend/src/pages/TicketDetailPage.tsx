@@ -8,7 +8,7 @@ import {
   canDeleteTicket,
   canEditTicket,
   canUpdateTicketStatus,
-  canViewOperationLogs,
+  canViewTicketLogs,
   normalizeRole,
 } from "../auth/permissions";
 import { TicketAiAssistantPanel } from "../components/ai/TicketAiAssistantPanel";
@@ -29,7 +29,7 @@ export function TicketDetailPage() {
   const queryClient = useQueryClient();
   const currentUser = useAuthStore((state) => state.user);
   const role = normalizeRole(currentUser?.role);
-  const canViewLogs = canViewOperationLogs(role);
+  const canViewLogs = canViewTicketLogs(role);
   const { lang, t } = useI18n();
   const [reply, setReply] = useState("");
   const [showLogs, setShowLogs] = useState(false);
@@ -254,7 +254,8 @@ export function TicketDetailPage() {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2 text-sm font-semibold">
                         <ReplyChip type={item.replyType} />
-                        <span>#{item.userId}</span>
+                        <span>{item.authorName?.trim() || `#${item.userId}`}</span>
+                        {item.authorRole ? <span className="text-xs font-medium text-muted">{item.authorRole}</span> : null}
                       </div>
                       <span className="text-xs text-muted">{formatTime(item.createdAt, lang)}</span>
                     </div>

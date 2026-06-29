@@ -93,7 +93,7 @@ public class PermissionUtil {
     }
 
     public static boolean canViewGlobalOperationLogs(String currentRole) {
-        return UserRole.isStaffOrAdmin(currentRole);
+        return UserRole.isAdmin(currentRole);
     }
 
     public static boolean canViewOperationLogRecord(User currentUser, OperationLog log) {

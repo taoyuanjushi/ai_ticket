@@ -9,7 +9,7 @@ public class RedisKeyConstants {
     }
 
     public static final String USER_DETAIL_PREFIX = "user:detail:";
-    public static final String TICKET_DETAIL_PREFIX = "ticket:detail:";
+    public static final String TICKET_DETAIL_PREFIX = "ticket:detail:v2:";
     public static final String TICKET_REPLY_LIST_PREFIX = "ticket:reply:list:";
 
     public static String userDetailKey(Long userId) {

@@ -8,8 +8,18 @@ public class OperationLogVO {
     private Long ticketId;
     private Long operatorId;
     private String operatorName;
+    private String username;
+    private String role;
     private String action;
     private String detail;
+    private String operationSource;
+    private String actionType;
+    private String conversationId;
+    private String targetType;
+    private Long targetId;
+    private String resultStatus;
+    private String requestSummary;
+    private String resultSummary;
     private LocalDateTime createdAt;
 
     public OperationLogVO() {
@@ -57,6 +67,22 @@ public class OperationLogVO {
         this.operatorName = operatorName;
     }
 
+    public String getUsername() {
+        return username;
+    }
+
+    public void setUsername(String username) {
+        this.username = username;
+    }
+
+    public String getRole() {
+        return role;
+    }
+
+    public void setRole(String role) {
+        this.role = role;
+    }
+
     public String getAction() {
         return action;
     }
@@ -71,6 +97,70 @@ public class OperationLogVO {
 
     public void setDetail(String detail) {
         this.detail = detail;
+    }
+
+    public String getOperationSource() {
+        return operationSource;
+    }
+
+    public void setOperationSource(String operationSource) {
+        this.operationSource = operationSource;
+    }
+
+    public String getActionType() {
+        return actionType;
+    }
+
+    public void setActionType(String actionType) {
+        this.actionType = actionType;
+    }
+
+    public String getConversationId() {
+        return conversationId;
+    }
+
+    public void setConversationId(String conversationId) {
+        this.conversationId = conversationId;
+    }
+
+    public String getTargetType() {
+        return targetType;
+    }
+
+    public void setTargetType(String targetType) {
+        this.targetType = targetType;
+    }
+
+    public Long getTargetId() {
+        return targetId;
+    }
+
+    public void setTargetId(Long targetId) {
+        this.targetId = targetId;
+    }
+
+    public String getResultStatus() {
+        return resultStatus;
+    }
+
+    public void setResultStatus(String resultStatus) {
+        this.resultStatus = resultStatus;
+    }
+
+    public String getRequestSummary() {
+        return requestSummary;
+    }
+
+    public void setRequestSummary(String requestSummary) {
+        this.requestSummary = requestSummary;
+    }
+
+    public String getResultSummary() {
+        return resultSummary;
+    }
+
+    public void setResultSummary(String resultSummary) {
+        this.resultSummary = resultSummary;
     }
 
     public LocalDateTime getCreatedAt() {

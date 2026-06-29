@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { AiPage } from "./pages/AiPage";
+import { DashboardPage } from "./pages/DashboardPage";
 import { ForbiddenPage } from "./pages/ForbiddenPage";
 import { LoginPage } from "./pages/LoginPage";
 import { LogsPage } from "./pages/LogsPage";
@@ -28,6 +29,14 @@ export function App() {
         <Route path="tickets/new" element={<TicketNewPage />} />
         <Route path="tickets/:id" element={<TicketDetailPage />} />
         <Route path="ai" element={<AiPage />} />
+        <Route
+          path="admin/dashboard"
+          element={
+            <RequireRole canAccess={canViewAdminArea}>
+              <DashboardPage />
+            </RequireRole>
+          }
+        />
         <Route
           path="users"
           element={

@@ -108,10 +108,3 @@ class UpdateTicketStatusRequest(BaseModel):
 
     def to_java_body(self) -> dict[str, str]:
         return {"status": self.status.value}
-
-
-class AiReplySaveRequest(BaseModel):
-    content: str
-
-    def to_java_body(self) -> dict[str, str]:
-        return {"content": self.content}

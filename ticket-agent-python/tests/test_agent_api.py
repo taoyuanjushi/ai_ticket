@@ -297,7 +297,7 @@ def test_agent_chat_update_status_multi_turn_fills_ticket_id_and_can_cancel() ->
     )
 
     assert cancel_response.status_code == 200
-    assert cancel_response.json()["answer"] == "已取消当前待补充或待确认的操作。"
+    assert cancel_response.json()["answer"] == "已取消修改工单状态，本次操作未执行。"
     assert FakeJavaTicketClient.pending_actions[("7", "multi-update")]["status"] == "CANCELLED"
 
 

@@ -177,6 +177,8 @@ class AgentToolService:
                 conversation_id=conversation_id,
                 auth_token=auth_token,
             )
+            if self._parse_agent_response(cancellation_result) is not None:
+                return cancellation_result
             if had_pending_intent or "没有待取消" in cancellation_result or "已取消" in cancellation_result:
                 return self._format_normal_response("已取消当前待补充或待确认的操作。")
             return cancellation_result
@@ -251,7 +253,13 @@ class AgentToolService:
             params["auth_token"] = auth_token
         tool_result = self.call_search_tickets(params)
         return self._format_normal_response(
-            self.format_search_tickets_answer(tool_result, params)
+            self.format_search_tickets_answer(tool_result, params),
+            intent="QUERY_TICKET",
+            actionType="AI_QUERY_TICKET",
+            riskLevel="READ",
+            toolName="query_ticket",
+            targetType="TICKET",
+            requiresConfirmation=False,
         )
 
     def _handle_unknown_intent(self) -> str:
@@ -560,6 +568,12 @@ class AgentToolService:
                 "description": params["description"],
                 "priority": params["priority"],
             },
+            intent="CREATE_TICKET",
+            actionType="AI_CREATE_TICKET_PENDING",
+            riskLevel="WRITE",
+            toolName="create_ticket",
+            targetType="TICKET",
+            requiresConfirmation=True,
         )
 
     def call_create_ticket(self, params: dict[str, str | bool]) -> dict[str, Any]:
@@ -682,6 +696,13 @@ class AgentToolService:
                 "ticket_id": int(intent_result.ticket_id),
                 "target_status": str(intent_result.target_status),
             },
+            intent="UPDATE_TICKET_STATUS",
+            actionType="AI_UPDATE_STATUS_PENDING",
+            riskLevel="WRITE",
+            toolName="update_ticket_status",
+            targetType="TICKET",
+            targetId=int(intent_result.ticket_id),
+            requiresConfirmation=True,
         )
 
     def call_update_ticket_status(
@@ -800,7 +821,18 @@ class AgentToolService:
             action_type=AiPendingActionType.SAVE_AI_REPLY,
             payload=payload,
         )
-        return self.format_save_ai_reply_confirmation(pending_action)
+        return self._format_pending_confirmation_response(
+            message=self.format_save_ai_reply_confirmation(pending_action),
+            action_type=AiPendingActionType.SAVE_AI_REPLY,
+            payload=payload,
+            intent="SAVE_AI_REPLY",
+            actionType="AI_REPLY_PENDING",
+            riskLevel="WRITE",
+            toolName="save_ai_reply",
+            targetType="TICKET",
+            targetId=ticket_id,
+            requiresConfirmation=True,
+        )
 
     def _handle_reply_suggestion_intent(
         self,
@@ -842,6 +874,13 @@ class AgentToolService:
         return self._format_json_result_response(
             message="回复建议生成完成",
             data=result.model_dump(mode="json"),
+            intent="GENERATE_REPLY_SUGGESTION",
+            actionType="AI_REPLY_SUGGESTION",
+            riskLevel="LOW",
+            toolName="generate_reply_suggestion",
+            targetType="TICKET",
+            targetId=int(intent_result.ticket_id),
+            requiresConfirmation=False,
         )
 
     def _handle_save_ai_reply_intent(
@@ -924,6 +963,13 @@ class AgentToolService:
                 "AI 分析完成",
             ),
             data=result.model_dump(mode="json"),
+            intent=intent_result.intent.value,
+            actionType=self._audit_action_type_for_grounded_intent(intent_result.intent),
+            riskLevel="READ",
+            toolName=self._tool_name_for_grounded_intent(intent_result.intent),
+            targetType="TICKET",
+            targetId=int(intent_result.ticket_id),
+            requiresConfirmation=False,
         )
 
     def handle_pending_action_approval(
@@ -942,8 +988,23 @@ class AgentToolService:
                 conversation_id,
                 exc.status_code,
             )
-            return exc.message
-        return self.format_java_pending_action_confirm_answer(result)
+            return self._format_error_response(
+                exc.message,
+                actionType="AI_FORBIDDEN" if exc.status_code in (403, 404) else "AI_ERROR",
+                riskLevel="UNKNOWN",
+                requiresConfirmation=False,
+            )
+        answer = self.format_java_pending_action_confirm_answer(result)
+        return self._format_normal_response(
+            answer,
+            intent="CONFIRM",
+            actionType=self._confirmed_audit_action_type(result.pendingAction.actionType),
+            riskLevel="WRITE",
+            toolName="confirm_pending_action",
+            targetType="TICKET",
+            targetId=self._pending_action_ticket_id(result.pendingAction.payload, result.result),
+            requiresConfirmation=False,
+        )
 
     def handle_pending_action_cancellation(
         self,
@@ -961,17 +1022,34 @@ class AgentToolService:
                 conversation_id,
                 exc.status_code,
             )
-            return exc.message
+            return self._format_error_response(
+                exc.message,
+                actionType="AI_FORBIDDEN" if exc.status_code in (403, 404) else "AI_ERROR",
+                riskLevel="UNKNOWN",
+                requiresConfirmation=False,
+            )
 
+        actionType = self._cancelled_audit_action_type(pending_action.actionType)
         if pending_action.actionType == AiPendingActionType.CREATE_TICKET:
-            return "已取消创建工单，本次操作未执行。"
-        if pending_action.actionType == AiPendingActionType.UPDATE_TICKET_STATUS:
-            return "已取消修改工单状态，本次操作未执行。"
-        if pending_action.actionType == AiPendingActionType.SAVE_AI_REPLY:
-            return "已取消保存 AI 回复建议，本次操作未执行。"
-        if pending_action.actionType == AiPendingActionType.APPLY_AI_CATEGORY:
-            return "已取消采纳 AI 分类建议，本次操作未执行。"
-        return "已取消待确认操作，本次操作未执行。"
+            message = "已取消创建工单，本次操作未执行。"
+        elif pending_action.actionType == AiPendingActionType.UPDATE_TICKET_STATUS:
+            message = "已取消修改工单状态，本次操作未执行。"
+        elif pending_action.actionType == AiPendingActionType.SAVE_AI_REPLY:
+            message = "已取消保存 AI 回复建议，本次操作未执行。"
+        elif pending_action.actionType == AiPendingActionType.APPLY_AI_CATEGORY:
+            message = "已取消采纳 AI 分类建议，本次操作未执行。"
+        else:
+            message = "已取消待确认操作，本次操作未执行。"
+        return self._format_normal_response(
+            message,
+            intent="CANCEL",
+            actionType=actionType,
+            riskLevel="WRITE",
+            toolName="cancel_pending_action",
+            targetType="TICKET",
+            targetId=self._pending_action_ticket_id(pending_action.payload, None),
+            requiresConfirmation=False,
+        )
 
     def format_java_pending_action_confirm_answer(
         self,
@@ -1216,6 +1294,7 @@ class AgentToolService:
         message: str,
         data: dict[str, Any] | list[Any] | None = None,
         risk_flags: list[str] | None = None,
+        **audit: Any,
     ) -> str:
         return self._serialize_agent_response(
             AgentResponse(
@@ -1223,23 +1302,26 @@ class AgentToolService:
                 message=message,
                 data=data,
                 risk_flags=risk_flags or [],
+                **audit,
             )
         )
 
-    def _format_normal_response(self, message: str) -> str:
-        return self._serialize_agent_response(ResponseBuilder.normal(message))
+    def _format_normal_response(self, message: str, **audit: Any) -> str:
+        return self._serialize_agent_response(ResponseBuilder.normal(message, **audit))
 
     def _format_missing_fields_response(
         self,
         message: str,
         missing_fields: list[str],
         collected: dict[str, Any],
+        **audit: Any,
     ) -> str:
         return self._serialize_agent_response(
             ResponseBuilder.missing_fields(
                 message=message,
                 missing_fields=missing_fields,
                 collected=self._strip_sensitive_payload(collected),
+                **audit,
             )
         )
 
@@ -1248,12 +1330,14 @@ class AgentToolService:
         message: str,
         action_type: AiPendingActionType,
         payload: dict[str, Any],
+        **audit: Any,
     ) -> str:
         return self._serialize_agent_response(
             ResponseBuilder.pending_confirmation(
                 message=message,
                 action_type=action_type.value,
                 payload=self._strip_sensitive_payload(payload),
+                **audit,
             )
         )
 
@@ -1261,16 +1345,18 @@ class AgentToolService:
         self,
         message: str,
         risk_flags: list[str] | None = None,
+        **audit: Any,
     ) -> str:
-        return self._serialize_agent_response(ResponseBuilder.error(message, risk_flags))
+        return self._serialize_agent_response(ResponseBuilder.error(message, risk_flags, **audit))
 
     def _format_json_result_response(
         self,
         message: str,
         data: dict[str, Any],
+        **audit: Any,
     ) -> str:
         return self._serialize_agent_response(
-            ResponseBuilder.json_result(message=message, data=data)
+            ResponseBuilder.json_result(message=message, data=data, **audit)
         )
 
     def _format_app_exception_response(self, exc: AppException) -> str:
@@ -1322,6 +1408,51 @@ class AgentToolService:
         if parsed is None:
             return ResponseBuilder.normal(structured_response)
         return AgentResponse.model_validate(parsed)
+
+    def _audit_action_type_for_grounded_intent(self, intent: IntentType) -> str:
+        if intent == IntentType.CATEGORY_SUGGESTION:
+            return "AI_CLASSIFY_TICKET"
+        return "AI_QUERY_TICKET"
+
+    def _tool_name_for_grounded_intent(self, intent: IntentType) -> str:
+        names = {
+            IntentType.TICKET_SUMMARY: "generate_ticket_summary",
+            IntentType.PRIORITY_SUGGESTION: "suggest_priority",
+            IntentType.CATEGORY_SUGGESTION: "classify_ticket",
+            IntentType.SIMILAR_TICKET_SEARCH: "search_similar_tickets",
+            IntentType.SLA_RISK_CHECK: "check_sla_risk",
+        }
+        return names.get(intent, "ticket_ai")
+
+    def _confirmed_audit_action_type(self, action_type: AiPendingActionType) -> str:
+        if action_type == AiPendingActionType.CREATE_TICKET:
+            return "AI_CREATE_TICKET_CONFIRMED"
+        if action_type == AiPendingActionType.UPDATE_TICKET_STATUS:
+            return "AI_UPDATE_STATUS_CONFIRMED"
+        if action_type == AiPendingActionType.SAVE_AI_REPLY:
+            return "AI_REPLY_CONFIRMED"
+        return "AI_CLASSIFY_TICKET"
+
+    def _cancelled_audit_action_type(self, action_type: AiPendingActionType) -> str:
+        if action_type == AiPendingActionType.CREATE_TICKET:
+            return "AI_CREATE_TICKET_CANCELLED"
+        if action_type == AiPendingActionType.UPDATE_TICKET_STATUS:
+            return "AI_UPDATE_STATUS_CANCELLED"
+        if action_type == AiPendingActionType.SAVE_AI_REPLY:
+            return "AI_REPLY_CANCELLED"
+        return "AI_CLASSIFY_TICKET"
+
+    def _pending_action_ticket_id(
+        self,
+        payload: dict[str, Any],
+        result: Any,
+    ) -> int | None:
+        if isinstance(result, dict):
+            value = result.get("id") or result.get("ticketId")
+            if isinstance(value, int):
+                return value
+        value = payload.get("ticketId") or payload.get("ticket_id")
+        return int(value) if isinstance(value, int | str) and str(value).isdigit() else None
 
     def _contains_any(self, text: str, fragments: tuple[str, ...]) -> bool:
         normalized = text.lower()

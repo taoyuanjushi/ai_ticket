@@ -38,4 +38,39 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "工单列表" })).toBeInTheDocument();
     expect(await screen.findByText("Login failure")).toBeInTheDocument();
   });
+
+  it("shows dashboard stats to admin", async () => {
+    window.localStorage.setItem("app_lang", "en");
+    window.history.pushState({}, "", "/admin/dashboard");
+    useAuthStore.getState().setSession("admin-token", {
+      id: 3,
+      username: "admin01",
+      name: "Admin One",
+      email: "admin01@example.com",
+      role: "ADMIN",
+    });
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Admin Dashboard" })).toBeInTheDocument();
+    expect(await screen.findByText("Total Tickets")).toBeInTheDocument();
+    expect(await screen.findByText("AI Acceptance Rate")).toBeInTheDocument();
+  });
+
+  it("blocks direct dashboard route for staff", async () => {
+    window.localStorage.setItem("app_lang", "en");
+    window.history.pushState({}, "", "/admin/dashboard");
+    useAuthStore.getState().setSession("staff-token", {
+      id: 2,
+      username: "staff01",
+      name: "Staff One",
+      email: "staff01@example.com",
+      role: "STAFF",
+    });
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Forbidden" })).toBeInTheDocument();
+    expect(screen.queryByText("Total Tickets")).not.toBeInTheDocument();
+  });
 });

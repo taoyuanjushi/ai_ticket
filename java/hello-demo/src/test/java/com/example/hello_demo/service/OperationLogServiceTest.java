@@ -102,10 +102,59 @@ class OperationLogServiceTest {
     }
 
     @Test
+    void aiAuditContentIsExposedAsStructuredFields() {
+        OperationLogMapper operationLogMapper = mock(OperationLogMapper.class);
+        UserMapper userMapper = mock(UserMapper.class);
+        OperationLogService service = service(operationLogMapper, userMapper);
+        when(operationLogMapper.selectPage(any(Page.class), any())).thenAnswer(invocation -> {
+            Page<OperationLog> page = invocation.getArgument(0);
+            page.setRecords(List.of(log(
+                    2L,
+                    3L,
+                    "AI_QUERY_TICKET",
+                    "TICKET",
+                    9L,
+                    "operationSource=AI; actionType=AI_QUERY_TICKET; conversationId=conv-1; targetType=TICKET; targetId=9; resultStatus=SUCCESS; requestSummary=查询工单; resultSummary=找到工单"
+            )));
+            page.setTotal(1);
+            return page;
+        });
+        when(userMapper.selectBatchIds(any())).thenReturn(List.of(user(3L, "Admin One", "ADMIN")));
+        CurrentUserContext.set(3L, "admin", "ADMIN");
+
+        var result = service.getOperationLogs(1L, 10L, null, null, "ALL", null, "AI", "SUCCESS", "conv-1");
+        var log = result.getRecords().get(0);
+
+        assertEquals("AI", log.getOperationSource());
+        assertEquals("AI_QUERY_TICKET", log.getActionType());
+        assertEquals("conv-1", log.getConversationId());
+        assertEquals("TICKET", log.getTargetType());
+        assertEquals(9L, log.getTargetId());
+        assertEquals("SUCCESS", log.getResultStatus());
+        assertEquals("查询工单", log.getRequestSummary());
+        assertEquals("找到工单", log.getResultSummary());
+    }
+
+    @Test
     void userCannotReadGlobalOperationLogs() {
         OperationLogMapper operationLogMapper = mock(OperationLogMapper.class);
         OperationLogService service = service(operationLogMapper, mock(UserMapper.class));
         CurrentUserContext.set(1L, "tom", "USER");
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> service.getOperationLogs(1L, 10L, null, null, null)
+        );
+
+        assertEquals(403, exception.getCode());
+        verify(operationLogMapper, never()).selectPage(any(), any());
+    }
+
+    @Test
+    void staffCannotReadGlobalOperationLogs() {
+        OperationLogMapper operationLogMapper = mock(OperationLogMapper.class);
+        OperationLogService service = service(operationLogMapper, mock(UserMapper.class));
+        CurrentUserContext.set(2L, "staff", "STAFF");
 
         BusinessException exception = assertThrows(
                 BusinessException.class,
@@ -150,7 +199,7 @@ class OperationLogServiceTest {
         assertTrue(PermissionUtil.canViewTicketLogs(user(2L, "Staff One", "STAFF"), ticket));
         assertTrue(PermissionUtil.canViewTicketLogs(user(3L, "Admin One", "ADMIN"), ticket));
         assertFalse(PermissionUtil.canViewGlobalOperationLogs(user(1L, "Tom", "USER")));
-        assertTrue(PermissionUtil.canViewGlobalOperationLogs(user(2L, "Staff One", "STAFF")));
+        assertFalse(PermissionUtil.canViewGlobalOperationLogs(user(2L, "Staff One", "STAFF")));
         assertTrue(PermissionUtil.canViewGlobalOperationLogs(user(3L, "Admin One", "ADMIN")));
     }
 

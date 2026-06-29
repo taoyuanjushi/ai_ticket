@@ -12,7 +12,6 @@ from app.schemas.pending_action import (
     CreateAiPendingActionRequest,
 )
 from app.schemas.ticket import (
-    AiReplySaveRequest,
     CreateTicketRequest,
     TicketDetailDTO,
     TicketDTO,
@@ -195,31 +194,6 @@ def test_update_ticket_status_returns_ticket_dto(
 
     assert ticket.id == 1
     assert ticket.status == TicketStatus.PROCESSING
-
-
-def test_save_ai_reply_returns_reply_dto(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = JavaTicketClient(token="java-token")
-
-    def fake_request(*args, **kwargs) -> dict:
-        return {
-            "id": 2,
-            "ticketId": 1,
-            "userId": 3,
-            "content": "建议先补充错误截图。",
-            "replyType": "AI",
-        }
-
-    monkeypatch.setattr(client, "_request", fake_request)
-
-    reply = client.save_ai_reply(
-        "java-token",
-        1,
-        AiReplySaveRequest(content="建议先补充错误截图。"),
-    )
-
-    assert reply.id == 2
-    assert reply.ticketId == 1
-    assert reply.type == TicketReplyType.AI
 
 
 def test_create_pending_action_returns_dto(monkeypatch: pytest.MonkeyPatch) -> None:

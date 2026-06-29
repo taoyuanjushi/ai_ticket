@@ -66,7 +66,14 @@ public class AiPendingActionService {
         Map<String, Object> payload = requirePayload(request.getPayload());
         rejectSensitivePayload(payload);
         validatePayload(actionType, payload);
-        validateActionCreationPermission(actionType, payload);
+        try {
+            validateActionCreationPermission(actionType, payload);
+        } catch (BusinessException e) {
+            if (e.getCode() == 403) {
+                recordAiPendingAudit(null, conversationId, actionType, payload, "FORBIDDEN", e.getMessage(), null);
+            }
+            throw e;
+        }
 
         cancelExistingPendingActions(currentUserId, conversationId);
 
@@ -88,6 +95,7 @@ public class AiPendingActionService {
                 "创建 AI 待确认动作：" + actionType.name() + "，conversationId=" + safeText(conversationId, 80)
         );
         recordSpecificPendingCreatedLog(action, actionType, payload);
+        recordAiPendingAudit(action, conversationId, actionType, payload, "SUCCESS", "创建 AI 待确认动作", null);
 
         return toResponse(action);
     }
@@ -185,7 +193,14 @@ public class AiPendingActionService {
         }
 
         Map<String, Object> payload = parsePayload(action);
-        Object result = executeBusinessAction(action, payload);
+        Object result;
+        try {
+            result = executeBusinessAction(action, payload);
+        } catch (BusinessException e) {
+            recordAiPendingAudit(action, action.getConversationId(), requireActionType(action.getActionType()), payload,
+                    e.getCode() == 403 ? "FORBIDDEN" : "FAILED", e.getMessage(), null);
+            throw e;
+        }
 
         action.setStatus(AiPendingActionStatus.CONFIRMED.name());
         action.setUpdatedAt(now);
@@ -197,6 +212,8 @@ public class AiPendingActionService {
                 buildConfirmedLogContent(action, payload)
         );
         recordSpecificConfirmedLog(action, payload, result);
+        recordAiPendingAudit(action, action.getConversationId(), requireActionType(action.getActionType()), payload,
+                "SUCCESS", "确认执行 AI 待确认动作", result);
 
         AiPendingActionConfirmResponse response = new AiPendingActionConfirmResponse();
         response.setPendingAction(toResponse(action));
@@ -248,6 +265,8 @@ public class AiPendingActionService {
                 "取消 AI 待确认动作：" + action.getActionType()
                         + "，conversationId=" + safeText(action.getConversationId(), 80)
         );
+        recordAiPendingAudit(action, action.getConversationId(), requireActionType(action.getActionType()), parsePayload(action),
+                "CANCELLED", "取消 AI 待确认动作", null);
 
         return toResponse(action);
     }
@@ -623,6 +642,127 @@ public class AiPendingActionService {
                         + "，旧分类=" + displayForLog(oldCategory)
                         + "，新分类=" + displayForLog(newCategory)
         );
+    }
+
+    private void recordAiPendingAudit(
+            AiPendingAction action,
+            String conversationId,
+            AiPendingActionType actionType,
+            Map<String, Object> payload,
+            String resultStatus,
+            String resultSummary,
+            Object result) {
+        String auditActionType = aiAuditActionType(action, actionType, resultStatus);
+        Long targetId = targetIdForAudit(actionType, payload, result);
+        String businessType = targetId == null ? BusinessType.AI_PENDING_ACTION.name() : BusinessType.TICKET.name();
+        Long businessId = targetId == null && action != null ? action.getId() : targetId;
+        operationLogService.recordAi(
+                auditActionType,
+                businessType,
+                businessId,
+                conversationId,
+                intentForAudit(actionType),
+                toolNameForAudit(actionType),
+                BusinessType.TICKET.name(),
+                targetId,
+                resultStatus,
+                requestSummaryForAudit(actionType, payload),
+                resultSummary,
+                payload == null ? null : payload.get("riskFlags")
+        );
+    }
+
+    private String aiAuditActionType(AiPendingAction action, AiPendingActionType actionType, String resultStatus) {
+        if ("FORBIDDEN".equals(resultStatus)) {
+            return OperationType.AI_FORBIDDEN.name();
+        }
+        if ("FAILED".equals(resultStatus)) {
+            return OperationType.AI_ERROR.name();
+        }
+        boolean confirmed = action != null && AiPendingActionStatus.CONFIRMED.name().equals(action.getStatus());
+        if (actionType == AiPendingActionType.CREATE_TICKET) {
+            if ("CANCELLED".equals(resultStatus)) {
+                return OperationType.AI_CREATE_TICKET_CANCELLED.name();
+            }
+            return confirmed ? OperationType.AI_CREATE_TICKET_CONFIRMED.name() : OperationType.AI_CREATE_TICKET_PENDING.name();
+        }
+        if (actionType == AiPendingActionType.UPDATE_TICKET_STATUS) {
+            if ("CANCELLED".equals(resultStatus)) {
+                return OperationType.AI_UPDATE_STATUS_CANCELLED.name();
+            }
+            return confirmed ? OperationType.AI_UPDATE_STATUS_CONFIRMED.name() : OperationType.AI_UPDATE_STATUS_PENDING.name();
+        }
+        if (actionType == AiPendingActionType.SAVE_AI_REPLY) {
+            if ("CANCELLED".equals(resultStatus)) {
+                return OperationType.AI_REPLY_CANCELLED.name();
+            }
+            return confirmed ? OperationType.AI_REPLY_CONFIRMED.name() : OperationType.AI_REPLY_PENDING.name();
+        }
+        return OperationType.AI_CLASSIFY_TICKET.name();
+    }
+
+    private String intentForAudit(AiPendingActionType actionType) {
+        if (actionType == AiPendingActionType.CREATE_TICKET) {
+            return "CREATE_TICKET";
+        }
+        if (actionType == AiPendingActionType.UPDATE_TICKET_STATUS) {
+            return "UPDATE_TICKET_STATUS";
+        }
+        if (actionType == AiPendingActionType.SAVE_AI_REPLY) {
+            return "SAVE_AI_REPLY";
+        }
+        return "CLASSIFY_TICKET";
+    }
+
+    private String toolNameForAudit(AiPendingActionType actionType) {
+        if (actionType == AiPendingActionType.CREATE_TICKET) {
+            return "create_ticket";
+        }
+        if (actionType == AiPendingActionType.UPDATE_TICKET_STATUS) {
+            return "update_ticket_status";
+        }
+        if (actionType == AiPendingActionType.SAVE_AI_REPLY) {
+            return "save_ai_reply";
+        }
+        return "classify_ticket";
+    }
+
+    private String requestSummaryForAudit(AiPendingActionType actionType, Map<String, Object> payload) {
+        if (payload == null) {
+            return actionType.name();
+        }
+        if (actionType == AiPendingActionType.CREATE_TICKET) {
+            return "创建工单：" + safeText(String.valueOf(payload.get("title")), 80);
+        }
+        if (actionType == AiPendingActionType.UPDATE_TICKET_STATUS) {
+            return "修改工单状态：" + payload.get("ticketId") + " -> " + payload.get("status");
+        }
+        if (actionType == AiPendingActionType.SAVE_AI_REPLY) {
+            return "保存 AI 回复：" + payload.get("ticketId");
+        }
+        return "采纳 AI 分类：" + payload.get("ticketId") + " -> " + payload.get("category");
+    }
+
+    private Long targetIdForAudit(AiPendingActionType actionType, Map<String, Object> payload, Object result) {
+        if (actionType == AiPendingActionType.CREATE_TICKET && result instanceof Ticket ticket) {
+            return ticket.getId();
+        }
+        if (actionType == AiPendingActionType.CREATE_TICKET) {
+            return null;
+        }
+        if (result instanceof TicketReply reply) {
+            return reply.getTicketId();
+        }
+        if (result instanceof Map<?, ?> resultMap) {
+            Object id = resultMap.get("id");
+            if (id instanceof Number number) {
+                return number.longValue();
+            }
+        }
+        if (payload != null && payload.get("ticketId") instanceof Number number) {
+            return number.longValue();
+        }
+        return null;
     }
 
     private String displayForLog(String value) {
