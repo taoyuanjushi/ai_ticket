@@ -26,10 +26,10 @@ class DashboardServiceTest {
     void adminGetsDatabaseCounts() {
         TicketMapper ticketMapper = mock(TicketMapper.class);
         OperationLogMapper operationLogMapper = mock(OperationLogMapper.class);
-        DashboardService service = new DashboardService(ticketMapper, operationLogMapper);
+        DashboardService service = new DashboardService(ticketMapper, operationLogMapper, new SlaPolicy());
 
         when(ticketMapper.selectCount(any(Wrapper.class)))
-                .thenReturn(12L, 4L, 3L, 0L, 5L, 2L, 1L);
+                .thenReturn(12L, 4L, 3L, 0L, 5L, 2L, 1L, 6L, 2L);
         when(operationLogMapper.selectCount(any(Wrapper.class)))
                 .thenReturn(8L, 5L);
         CurrentUserContext.set(9L, "admin", "ADMIN");
@@ -43,6 +43,8 @@ class DashboardServiceTest {
         assertEquals(5L, stats.closedCount());
         assertEquals(2L, stats.highPriorityCount());
         assertEquals(1L, stats.urgentPriorityCount());
+        assertEquals(6L, stats.slaAtRiskCount());
+        assertEquals(2L, stats.slaOverdueCount());
         assertEquals(8L, stats.aiSuggestionCount());
         assertEquals(5L, stats.aiAcceptedCount());
         assertEquals(0.625, stats.aiAcceptanceRate());
@@ -52,7 +54,7 @@ class DashboardServiceTest {
     void zeroSuggestionCountReturnsZeroRate() {
         TicketMapper ticketMapper = mock(TicketMapper.class);
         OperationLogMapper operationLogMapper = mock(OperationLogMapper.class);
-        DashboardService service = new DashboardService(ticketMapper, operationLogMapper);
+        DashboardService service = new DashboardService(ticketMapper, operationLogMapper, new SlaPolicy());
 
         when(ticketMapper.selectCount(any(Wrapper.class))).thenReturn(0L);
         when(operationLogMapper.selectCount(any(Wrapper.class))).thenReturn(0L, 0L);
@@ -65,7 +67,7 @@ class DashboardServiceTest {
     void userCannotGetStats() {
         TicketMapper ticketMapper = mock(TicketMapper.class);
         OperationLogMapper operationLogMapper = mock(OperationLogMapper.class);
-        DashboardService service = new DashboardService(ticketMapper, operationLogMapper);
+        DashboardService service = new DashboardService(ticketMapper, operationLogMapper, new SlaPolicy());
         CurrentUserContext.set(1L, "tom", "USER");
 
         BusinessException exception = assertThrows(BusinessException.class, service::getStats);
@@ -78,7 +80,7 @@ class DashboardServiceTest {
     void staffCannotGetStats() {
         TicketMapper ticketMapper = mock(TicketMapper.class);
         OperationLogMapper operationLogMapper = mock(OperationLogMapper.class);
-        DashboardService service = new DashboardService(ticketMapper, operationLogMapper);
+        DashboardService service = new DashboardService(ticketMapper, operationLogMapper, new SlaPolicy());
         CurrentUserContext.set(2L, "staff", "STAFF");
 
         BusinessException exception = assertThrows(BusinessException.class, service::getStats);

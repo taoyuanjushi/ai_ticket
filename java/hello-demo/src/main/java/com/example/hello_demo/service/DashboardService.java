@@ -12,6 +12,7 @@ import com.example.hello_demo.vo.DashboardStatsVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -19,10 +20,12 @@ public class DashboardService {
 
     private final TicketMapper ticketMapper;
     private final OperationLogMapper operationLogMapper;
+    private final SlaPolicy slaPolicy;
 
-    public DashboardService(TicketMapper ticketMapper, OperationLogMapper operationLogMapper) {
+    public DashboardService(TicketMapper ticketMapper, OperationLogMapper operationLogMapper, SlaPolicy slaPolicy) {
         this.ticketMapper = ticketMapper;
         this.operationLogMapper = operationLogMapper;
+        this.slaPolicy = slaPolicy;
     }
 
     @Transactional(readOnly = true)
@@ -36,6 +39,9 @@ public class DashboardService {
         Long closedCount = countTicketsByStatus("CLOSED");
         Long highPriorityCount = countTicketsByPriority("HIGH");
         Long urgentPriorityCount = countTicketsByPriority("URGENT");
+        LocalDateTime now = LocalDateTime.now();
+        Long slaAtRiskCount = countSlaAtRisk(now);
+        Long slaOverdueCount = countSlaOverdue(now);
         Long aiSuggestionCount = countOperation(OperationType.AI_REPLY_SUGGESTION);
         Long aiAcceptedCount = countOperation(OperationType.AI_REPLY_CONFIRMED);
 
@@ -51,6 +57,8 @@ public class DashboardService {
                 closedCount,
                 highPriorityCount,
                 urgentPriorityCount,
+                slaAtRiskCount,
+                slaOverdueCount,
                 aiSuggestionCount,
                 aiAcceptedCount,
                 aiAcceptanceRate
@@ -76,6 +84,25 @@ public class DashboardService {
     private Long countTicketsByPriority(String priority) {
         return safeCount(ticketMapper.selectCount(
                 new LambdaQueryWrapper<Ticket>().eq(Ticket::getPriority, priority)
+        ));
+    }
+
+    private Long countSlaAtRisk(LocalDateTime now) {
+        return safeCount(ticketMapper.selectCount(
+                new LambdaQueryWrapper<Ticket>()
+                        .notIn(Ticket::getStatus, List.of("CLOSED", "DONE"))
+                        .isNotNull(Ticket::getResolveDueAt)
+                        .ge(Ticket::getResolveDueAt, now)
+                        .le(Ticket::getResolveDueAt, slaPolicy.riskThreshold(now))
+        ));
+    }
+
+    private Long countSlaOverdue(LocalDateTime now) {
+        return safeCount(ticketMapper.selectCount(
+                new LambdaQueryWrapper<Ticket>()
+                        .notIn(Ticket::getStatus, List.of("CLOSED", "DONE"))
+                        .isNotNull(Ticket::getResolveDueAt)
+                        .lt(Ticket::getResolveDueAt, now)
         ));
     }
 

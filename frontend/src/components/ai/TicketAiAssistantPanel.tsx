@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Clock, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../api/client";
@@ -11,7 +12,7 @@ import { PendingActionCard } from "./PendingActionCard";
 import { useI18n } from "../../i18n";
 import { useAuthStore } from "../../state/authStore";
 import type { AiLoadingMode, AiMessageKind } from "../../types/ai";
-import { createAssistantMessage, stringifyScalar } from "../../utils/aiMessages";
+import { createAssistantMessage, stringifyScalar, toStringList } from "../../utils/aiMessages";
 
 interface TicketAiAssistantPanelProps {
   ticketId: number;
@@ -69,6 +70,7 @@ const actions: TicketAiAction[] = [
 
 export function TicketAiAssistantPanel({ ticketId }: TicketAiAssistantPanelProps) {
   const { lang, t } = useI18n();
+  const queryClient = useQueryClient();
   const role = normalizeRole(useAuthStore((state) => state.user?.role));
   const [conversationId] = useState(() => createConversationId());
   const [results, setResults] = useState<TicketAiResultItem[]>([]);
@@ -82,6 +84,7 @@ export function TicketAiAssistantPanel({ ticketId }: TicketAiAssistantPanelProps
     actionKey: string,
     actionLabel: string,
     message: string,
+    options: { onSuccess?: () => void | Promise<void> } = {},
   ) => {
     if (loadingAction) return;
     setLoadingAction(actionKey);
@@ -89,12 +92,12 @@ export function TicketAiAssistantPanel({ ticketId }: TicketAiAssistantPanelProps
     try {
       const response = await api.aiChat(message, conversationId);
       appendResult(actionKey, actionLabel, message, response);
+      await options.onSuccess?.();
     } catch (error) {
       appendResult(actionKey, actionLabel, message, error, t("ticketAi.requestFailed"));
     } finally {
       setLoadingAction(null);
     }
-
   };
 
   const sendPendingRequest = async (
@@ -155,18 +158,38 @@ export function TicketAiAssistantPanel({ ticketId }: TicketAiAssistantPanelProps
       `${source.id}:${mode}`,
       mode === "confirm" ? t("ai.confirmAction") : t("ai.cancelAction"),
       command,
+      {
+        onSuccess: async () => {
+          await refreshAfterAiAction();
+          clearAiDrafts();
+        },
+      },
     );
   };
 
   const requestSaveAiReply = (source: TicketAiResultItem, payload: Record<string, unknown>) => {
-    const content = stringifyScalar(payload.suggestion);
-    if (!content) return;
+    const suggestion = stringifyScalar(payload.suggestion);
+    if (!suggestion) return;
+    const originalSuggestion = stringifyScalar(payload.originalSuggestion) ?? suggestion;
+    const confidence = typeof payload.confidence === "number" ? payload.confidence : undefined;
+    const reason = stringifyScalar(payload.reason) ?? undefined;
+    const riskFlags = toStringList(payload.riskFlags).length > 0
+      ? toStringList(payload.riskFlags)
+      : toStringList(payload.risk_flags);
     const message = `保存 ${ticketId} 号工单的 AI 回复建议`;
     void sendPendingRequest(
       `${source.id}:save-ai-reply`,
       t("actions.saveAiReply"),
       message,
-      () => api.createAiReplyPending(ticketId, conversationId, content),
+      () =>
+        api.createAiReplyPending(ticketId, {
+          conversationId,
+          suggestion,
+          originalSuggestion,
+          confidence,
+          reason,
+          riskFlags,
+        }),
     );
   };
 
@@ -188,6 +211,20 @@ export function TicketAiAssistantPanel({ ticketId }: TicketAiAssistantPanelProps
           reason,
         }),
     );
+  };
+
+  const refreshAfterAiAction = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["ticket-detail", ticketId] }),
+      queryClient.invalidateQueries({ queryKey: ["ticket-logs", ticketId] }),
+      queryClient.invalidateQueries({ queryKey: ["tickets"] }),
+      queryClient.invalidateQueries({ queryKey: ["logs"] }),
+      queryClient.invalidateQueries({ queryKey: ["admin-dashboard-stats"] }),
+    ]);
+  };
+
+  const clearAiDrafts = () => {
+    setResults((prev) => prev.filter((item) => item.kind !== "json" && item.kind !== "pending"));
   };
 
   return (

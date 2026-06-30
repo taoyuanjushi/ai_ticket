@@ -40,6 +40,14 @@ CREATE INDEX idx_ticket_category ON ticket(category);
 -- ADD COLUMN assigned_to BIGINT NULL COMMENT '处理人用户ID';
 -- CREATE INDEX idx_ticket_assigned_to ON ticket(assigned_to);
 
+-- 如果旧表缺少 SLA 字段，可按需执行下面语句。历史工单允许为空，展示为 NO_SLA。
+-- ALTER TABLE ticket
+-- ADD COLUMN response_due_at DATETIME NULL COMMENT '首次响应截止时间',
+-- ADD COLUMN resolve_due_at DATETIME NULL COMMENT '解决截止时间',
+-- ADD COLUMN closed_at DATETIME NULL COMMENT '工单关闭时间';
+-- CREATE INDEX idx_ticket_resolve_due_at ON ticket(resolve_due_at);
+-- CREATE INDEX idx_ticket_closed_at ON ticket(closed_at);
+
 -- =========================================================
 -- ticket_reply 表字段和索引
 -- =========================================================

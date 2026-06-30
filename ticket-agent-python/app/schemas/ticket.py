@@ -23,6 +23,14 @@ class TicketReplyType(str, Enum):
     AI = "AI"
 
 
+class TicketSlaStatus(str, Enum):
+    NO_SLA = "NO_SLA"
+    ON_TRACK = "ON_TRACK"
+    AT_RISK = "AT_RISK"
+    OVERDUE = "OVERDUE"
+    COMPLETED = "COMPLETED"
+
+
 class TicketDTO(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -49,6 +57,10 @@ class TicketDTO(BaseModel):
     lastReplyAt: str | None = None
     responseDueAt: str | None = None
     resolveDueAt: str | None = None
+    closedAt: str | None = None
+    slaStatus: TicketSlaStatus | None = None
+    slaOverdue: bool | None = None
+    slaRemainingMinutes: int | None = None
 
 
 class TicketReplyDTO(BaseModel):

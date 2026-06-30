@@ -96,10 +96,20 @@ export const api = {
   aiChat: (message: string, conversationId: string) =>
     request<AiChatResponse>("/ai/chat", { method: "POST", body: { message, conversationId } }),
 
-  createAiReplyPending: (ticketId: number, conversationId: string, content: string) =>
+  createAiReplyPending: (
+    ticketId: number,
+    body: {
+      conversationId: string;
+      suggestion: string;
+      originalSuggestion?: string;
+      confidence?: number;
+      reason?: string;
+      riskFlags?: string[];
+    },
+  ) =>
     request<AiChatResponse>(`/tickets/${ticketId}/ai-replies/pending`, {
       method: "POST",
-      body: { conversationId, content },
+      body,
     }),
 
   createCategoryPending: (

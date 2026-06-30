@@ -9,10 +9,11 @@ import {
   canEditTicket,
   canUpdateTicketStatus,
   canViewTicketLogs,
+  isAdmin,
   normalizeRole,
 } from "../auth/permissions";
 import { TicketAiAssistantPanel } from "../components/ai/TicketAiAssistantPanel";
-import { Badge, PriorityBadge, StatusBadge } from "../components/Badge";
+import { Badge, PriorityBadge, SlaBadge, StatusBadge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -21,7 +22,7 @@ import { Loading } from "../components/Loading";
 import { PageHeader } from "../components/PageHeader";
 import { formatPriority, formatReplyType, formatTicketStatus, useI18n } from "../i18n";
 import { useAuthStore } from "../state/authStore";
-import type { OperationLog, PageResult, TicketPriority, TicketStatus } from "../types/domain";
+import type { OperationLog, PageResult, TicketPriority, TicketStatus, User } from "../types/domain";
 
 export function TicketDetailPage() {
   const { id } = useParams();
@@ -29,6 +30,7 @@ export function TicketDetailPage() {
   const queryClient = useQueryClient();
   const currentUser = useAuthStore((state) => state.user);
   const role = normalizeRole(currentUser?.role);
+  const isAdminRole = isAdmin(role);
   const canViewLogs = canViewTicketLogs(role);
   const { lang, t } = useI18n();
   const [reply, setReply] = useState("");
@@ -50,6 +52,24 @@ export function TicketDetailPage() {
   });
 
   const ticket = detailQuery.data?.ticket;
+
+  const usersQuery = useQuery({
+    queryKey: ["users"],
+    queryFn: api.getUsers,
+    enabled: isAdminRole,
+  });
+
+  const assignableUsers = usersQuery.data?.filter((user) => user.role === "STAFF" || user.role === "ADMIN") ?? [];
+
+  const invalidateAssignmentQueries = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["ticket-detail", ticketId] }),
+      queryClient.invalidateQueries({ queryKey: ["tickets"] }),
+      queryClient.invalidateQueries({ queryKey: ["ticket-logs", ticketId] }),
+      queryClient.invalidateQueries({ queryKey: ["logs"] }),
+      queryClient.invalidateQueries({ queryKey: ["admin-dashboard-stats"] }),
+    ]);
+  };
 
   const logsQuery = useQuery({
     queryKey: ["ticket-logs", ticketId, logPage],
@@ -105,10 +125,12 @@ export function TicketDetailPage() {
 
   const assignToMeMutation = useMutation({
     mutationFn: () => api.updateTicketAssignee(ticketId, currentUser?.id ?? null),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["ticket-detail", ticketId] });
-      await queryClient.invalidateQueries({ queryKey: ["tickets"] });
-    },
+    onSuccess: invalidateAssignmentQueries,
+  });
+
+  const assigneeMutation = useMutation({
+    mutationFn: (assignedTo: number | null) => api.updateTicketAssignee(ticketId, assignedTo),
+    onSuccess: invalidateAssignmentQueries,
   });
 
   if (detailQuery.isLoading) return <Loading label={t("common.loading")} />;
@@ -122,6 +144,11 @@ export function TicketDetailPage() {
   const canDelete = canDeleteTicket(role);
   const canAssign = canAssignTicket(role);
   const canReply = ticket.status !== "CLOSED";
+  const currentAssignee = ticket.assignedTo
+    ? `#${ticket.assignedTo} ${ticket.assignedUserName ?? ""}`.trim()
+    : t("ticket.unassigned");
+  const selectedAssigneeMissing =
+    ticket.assignedTo != null && !assignableUsers.some((user) => user.id === ticket.assignedTo);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -223,16 +250,61 @@ export function TicketDetailPage() {
                 <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-ink">{ticket.content}</p>
                 <div className="mt-4 grid gap-2 text-sm text-muted sm:grid-cols-3">
                   <InfoLine label={t("common.owner")} value={`#${detailQuery.data.user.id} ${detailQuery.data.user.name}`} />
-                  <InfoLine
-                    label={t("ticket.assignee")}
-                    value={
-                      ticket.assignedTo
-                        ? `#${ticket.assignedTo} ${ticket.assignedUserName ?? ""}`.trim()
-                        : t("ticket.unassigned")
-                    }
-                  />
+                  {isAdminRole ? (
+                    <div>
+                      <Field label={t("ticket.assignee")}>
+                        <SelectInput
+                          value={ticket.assignedTo ? String(ticket.assignedTo) : ""}
+                          disabled={assigneeMutation.isPending || usersQuery.isLoading}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            assigneeMutation.mutate(value ? Number(value) : null);
+                          }}
+                        >
+                          <option value="">{t("ticket.unassigned")}</option>
+                          {selectedAssigneeMissing ? (
+                            <option value={ticket.assignedTo ?? ""}>{currentAssignee}</option>
+                          ) : null}
+                          {assignableUsers.map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {formatAssigneeOption(user)}
+                            </option>
+                          ))}
+                        </SelectInput>
+                      </Field>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className="text-xs text-muted">{currentAssignee}</span>
+                        <Button
+                          className="h-8 px-2 text-xs"
+                          variant="secondary"
+                          disabled={!ticket.assignedTo || assigneeMutation.isPending}
+                          onClick={() => assigneeMutation.mutate(null)}
+                        >
+                          {t("ticket.clearAssignee")}
+                        </Button>
+                      </div>
+                      {usersQuery.error instanceof Error ? (
+                        <p className="mt-1 text-xs text-danger">{usersQuery.error.message}</p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <InfoLine label={t("ticket.assignee")} value={currentAssignee} />
+                  )}
                   <InfoLine label={t("common.created")} value={formatTime(ticket.createdAt, lang)} />
                   <InfoLine label={t("common.updated")} value={formatTime(ticket.updatedAt, lang)} />
+                </div>
+                <div className="mt-5 border-t border-line pt-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-ink">{t("ticket.sla")}</span>
+                    <SlaBadge status={ticket.slaStatus} />
+                  </div>
+                  <div className="mt-3 grid gap-2 text-sm text-muted sm:grid-cols-3">
+                    <InfoLine label={t("ticket.responseDueAt")} value={formatTime(ticket.responseDueAt ?? undefined, lang)} />
+                    <InfoLine label={t("ticket.resolveDueAt")} value={formatTime(ticket.resolveDueAt ?? undefined, lang)} />
+                    <InfoLine label={t("ticket.closedAt")} value={formatTime(ticket.closedAt ?? undefined, lang)} />
+                    <InfoLine label={t("ticket.slaOverdue")} value={ticket.slaOverdue ? t("ticket.overdue") : t("ticket.notOverdue")} />
+                    <InfoLine label={t("ticket.slaRemaining")} value={formatRemainingMinutes(ticket.slaRemainingMinutes, t)} />
+                  </div>
                 </div>
               </>
             )}
@@ -299,7 +371,7 @@ export function TicketDetailPage() {
               />
             </Field>
             <div className="mt-3 flex items-center justify-end gap-2">
-              {canAssign ? (
+              {canAssign && !isAdminRole ? (
                 <Button
                   variant="secondary"
                   disabled={assignToMeMutation.isPending || ticket.assignedTo === currentUser?.id}
@@ -347,6 +419,11 @@ function InfoLine({ label, value }: { label: string; value: string }) {
       <p className="mt-1 text-sm text-ink">{value}</p>
     </div>
   );
+}
+
+function formatAssigneeOption(user: User) {
+  const displayName = user.name?.trim() || user.username;
+  return `#${user.id} ${displayName} (${user.role})`;
 }
 
 function ReplyChip({ type }: { type: string }) {
@@ -451,4 +528,12 @@ function TicketLogsPanel({
 function formatTime(value: string | undefined, lang: string) {
   if (!value) return "-";
   return new Date(value).toLocaleString(lang === "zh" ? "zh-CN" : "en-US", { hour12: false });
+}
+
+function formatRemainingMinutes(value: number | null | undefined, t: (key: string, fallback?: string) => string) {
+  if (value == null) return t("ticket.notSet");
+  if (value <= 0) return `0m`;
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }

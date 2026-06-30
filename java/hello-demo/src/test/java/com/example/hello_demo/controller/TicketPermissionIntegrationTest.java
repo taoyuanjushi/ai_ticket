@@ -12,6 +12,7 @@ import com.example.hello_demo.service.AiPendingActionService;
 import com.example.hello_demo.service.OperationLogService;
 import com.example.hello_demo.service.TicketCacheService;
 import com.example.hello_demo.service.TicketService;
+import com.example.hello_demo.service.SlaPolicy;
 import com.example.hello_demo.service.TicketStatusTransitionPolicy;
 import com.example.hello_demo.vo.TicketDetailVO;
 import com.example.hello_demo.vo.TicketReplyVO;
@@ -72,7 +73,8 @@ class TicketPermissionIntegrationTest extends MockMvcIntegrationTestSupport {
                 ticketReplyMapper,
                 operationLogService,
                 ticketCacheService,
-                new TicketStatusTransitionPolicy()
+                new TicketStatusTransitionPolicy(),
+                new SlaPolicy()
         );
         TicketController controller = new TicketController(
                 ticketService,

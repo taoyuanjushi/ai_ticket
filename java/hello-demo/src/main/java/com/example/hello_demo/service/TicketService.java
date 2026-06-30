@@ -49,14 +49,16 @@ public class TicketService {
     private final OperationLogService operationLogService;
     private final TicketCacheService ticketCacheService;
     private final TicketStatusTransitionPolicy statusTransitionPolicy;
+    private final SlaPolicy slaPolicy;
 
-    public TicketService(TicketMapper ticketMapper, UserMapper userMapper, TicketReplyMapper ticketReplyMapper, OperationLogService operationLogService, TicketCacheService ticketCacheService, TicketStatusTransitionPolicy statusTransitionPolicy) {
+    public TicketService(TicketMapper ticketMapper, UserMapper userMapper, TicketReplyMapper ticketReplyMapper, OperationLogService operationLogService, TicketCacheService ticketCacheService, TicketStatusTransitionPolicy statusTransitionPolicy, SlaPolicy slaPolicy) {
         this.ticketMapper = ticketMapper;
         this.userMapper = userMapper;
         this.ticketReplyMapper = ticketReplyMapper;
         this.operationLogService = operationLogService;
         this.ticketCacheService = ticketCacheService;
         this.statusTransitionPolicy = statusTransitionPolicy;
+        this.slaPolicy = slaPolicy;
     }
 
     /**
@@ -88,9 +90,14 @@ public class TicketService {
         if (request.getCategory() != null) {
             wrapper.eq(Ticket::getCategory, request.getCategory());
         }
-        Long assignedTo = normalizeAssignedToFilter(request.getAssignedTo(), currentUserId);
-        if (assignedTo != null) {
-            wrapper.eq(Ticket::getAssignedTo, assignedTo);
+        String assignedToFilter = request.getAssignedTo();
+        if ("unassigned".equalsIgnoreCase(assignedToFilter)) {
+            wrapper.isNull(Ticket::getAssignedTo);
+        } else {
+            Long assignedTo = normalizeAssignedToFilter(assignedToFilter, currentUserId, currentRole);
+            if (assignedTo != null) {
+                wrapper.eq(Ticket::getAssignedTo, assignedTo);
+            }
         }
         String keyword = request.getKeyword();
         if (keyword != null) {
@@ -103,6 +110,7 @@ public class TicketService {
         wrapper.orderByDesc(Ticket::getCreatedAt);
 
         Page<Ticket> resultPage = ticketMapper.selectPage(pageParam, wrapper);
+        decorateTickets(resultPage.getRecords());
         return PageResult.of(
                 resultPage.getRecords(),
                 resultPage.getTotal(),
@@ -122,7 +130,7 @@ public class TicketService {
             throw new BusinessException(404, "目标工单不存在。");
         }
         checkTicketReadable(ticket);
-        return ticket;
+        return decorateTicket(ticket);
     }
 
     /**
@@ -148,6 +156,11 @@ public class TicketService {
             validatePriority(priority);
             ticket.setPriority(priority);
         }
+        LocalDateTime now = LocalDateTime.now();
+        ticket.setCreatedAt(now);
+        ticket.setUpdatedAt(now);
+        ticket.setResponseDueAt(slaPolicy.calculateResponseDueAt(ticket.getPriority(), now));
+        ticket.setResolveDueAt(slaPolicy.calculateResolveDueAt(ticket.getPriority(), now));
         ticketMapper.insert(ticket);
         operationLogService.record(
                 OperationType.CREATE_TICKET.name(),
@@ -156,7 +169,7 @@ public class TicketService {
                 "用户创建了工单 #" + ticket.getId()
         );
 
-        return ticketMapper.selectById(ticket.getId());
+        return decorateTicket(ticketMapper.selectById(ticket.getId()));
     }
 
     /**
@@ -169,6 +182,7 @@ public class TicketService {
         if (cached != null && cached.getTicket() != null) {
             // 缓存命中后仍要校验数据权限，避免 USER 读取到别人的工单详情。
             checkTicketReadable(cached.getTicket());
+            decorateTicket(cached.getTicket());
             return cached;
         }
 
@@ -177,6 +191,7 @@ public class TicketService {
             throw new BusinessException(404, "目标工单不存在。");
         }
         checkTicketReadable(ticket);
+        decorateTicket(ticket);
 
         User user = userMapper.selectById(ticket.getUserId());
         if (user == null) {
@@ -219,7 +234,11 @@ public class TicketService {
         ticket.setContent(request.getContent());
         ticket.setPriority(priority);
         ticket.setStatus(status);
-        ticket.setUpdatedAt(LocalDateTime.now());
+        LocalDateTime now = LocalDateTime.now();
+        ticket.setUpdatedAt(now);
+        if (slaPolicy.isCompletedStatus(status) && existingTicket.getClosedAt() == null) {
+            ticket.setClosedAt(now);
+        }
 
         if (request.getCategory() != null) {
             ticket.setCategory(normalizeCategoryForStorage(request.getCategory()));
@@ -263,7 +282,7 @@ public class TicketService {
                 "工单分类从 [" + displayValue(oldCategory, "未分类") + "] 修改为 [" + displayValue(newCategory, "未分类") + "]"
         );
 
-        return ticketMapper.selectById(id);
+        return decorateTicket(ticketMapper.selectById(id));
     }
 
     /**
@@ -302,7 +321,7 @@ public class TicketService {
                 "工单处理人从 [" + oldAssigneeName + "] 修改为 [" + newAssigneeName + "]"
         );
 
-        return ticketMapper.selectById(id);
+        return decorateTicket(ticketMapper.selectById(id));
     }
 
     /**
@@ -321,12 +340,16 @@ public class TicketService {
 
         String currentStatus = ticket.getStatus();
         if (currentStatus.equals(normalizedStatus)) {
-            return ticket;
+            return decorateTicket(ticket);
         }
         statusTransitionPolicy.validateTransition(currentStatus, normalizedStatus);
 
+        LocalDateTime now = LocalDateTime.now();
         ticket.setStatus(normalizedStatus);
-        ticket.setUpdatedAt(LocalDateTime.now());
+        ticket.setUpdatedAt(now);
+        if (slaPolicy.isCompletedStatus(normalizedStatus) && ticket.getClosedAt() == null) {
+            ticket.setClosedAt(now);
+        }
 
         int rows = ticketMapper.updateById(ticket);
         if (rows == 0) {
@@ -341,7 +364,7 @@ public class TicketService {
                 "用户将工单 #" + ticket.getId() + " 状态修改为 " + normalizedStatus
         );
 
-        return ticketMapper.selectById(id);
+        return decorateTicket(ticketMapper.selectById(id));
     }
 
     /**
@@ -450,6 +473,20 @@ public class TicketService {
         return ticket;
     }
 
+    private Ticket decorateTicket(Ticket ticket) {
+        if (ticket != null) {
+            slaPolicy.applySlaSnapshot(ticket);
+        }
+        return ticket;
+    }
+
+    private void decorateTickets(List<Ticket> tickets) {
+        if (tickets == null || tickets.isEmpty()) {
+            return;
+        }
+        tickets.forEach(this::decorateTicket);
+    }
+
     private void validateId(Long id) {
         if (id == null) {
             throw new BusinessException(400, "工单id不能为空");
@@ -510,7 +547,7 @@ public class TicketService {
         }
     }
 
-    private Long normalizeAssignedToFilter(String assignedTo, Long currentUserId) {
+    private Long normalizeAssignedToFilter(String assignedTo, Long currentUserId, String currentRole) {
         if (assignedTo == null) {
             return null;
         }
@@ -521,6 +558,9 @@ public class TicketService {
             long value = Long.parseLong(assignedTo);
             if (value < 1) {
                 throw new BusinessException(400, "assignedTo不能小于1");
+            }
+            if (UserRole.isStaff(currentRole) && !currentUserId.equals(value)) {
+                throw new BusinessException(403, "你没有权限执行该操作。");
             }
             return value;
         } catch (NumberFormatException e) {

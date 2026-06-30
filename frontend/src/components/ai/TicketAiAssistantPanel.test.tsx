@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,12 +12,26 @@ import type { TicketDetail } from "../../types/domain";
 import { TicketDetailPage } from "../../pages/TicketDetailPage";
 import { TicketAiAssistantPanel } from "./TicketAiAssistantPanel";
 
+const originalSuggestion = "请用户补充发票编号和截图。";
+const editedSuggestion = "这是 STAFF 编辑后的测试回复。";
+const suggestionReason = "当前描述缺少复现细节。";
+const riskFlags = ["需要人工确认"];
+
 function renderPanel({ withLanguageSwitcher = false } = {}) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+
   return render(
-    <I18nProvider>
-      {withLanguageSwitcher ? <LanguageSwitcher /> : null}
-      <TicketAiAssistantPanel ticketId={3} />
-    </I18nProvider>,
+    <QueryClientProvider client={queryClient}>
+      <I18nProvider>
+        {withLanguageSwitcher ? <LanguageSwitcher /> : null}
+        <TicketAiAssistantPanel ticketId={3} />
+      </I18nProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -49,10 +63,34 @@ function stubStableCrypto() {
   });
 }
 
+function setCurrentUser(role: "USER" | "STAFF" | "ADMIN") {
+  useAuthStore.getState().setSession(`${role.toLowerCase()}-token`, {
+    id: role === "USER" ? 1 : role === "STAFF" ? 2 : 3,
+    username: role === "USER" ? "tom" : role === "STAFF" ? "staff01" : "admin01",
+    name: role === "USER" ? "Tom" : role === "STAFF" ? "Staff One" : "Admin One",
+    email: role === "USER" ? "tom@example.com" : role === "STAFF" ? "staff01@example.com" : "admin01@example.com",
+    role,
+  });
+}
+
 function expectTextContent(text: string) {
   expect(
     screen.getByText((_, node) => Boolean(node && node.textContent === text)),
   ).toBeInTheDocument();
+}
+
+function replySuggestionResponse() {
+  return {
+    type: "JSON_RESULT",
+    message: "回复建议生成完成",
+    data: {
+      suggestion: originalSuggestion,
+      confidence: 0.82,
+      reason: suggestionReason,
+      risk_flags: riskFlags,
+    },
+    risk_flags: riskFlags,
+  };
 }
 
 const ticketDetail: TicketDetail = {
@@ -95,13 +133,7 @@ describe("TicketAiAssistantPanel", () => {
   });
 
   it("hides internal ticket actions from USER on the detail page", async () => {
-    useAuthStore.getState().setSession("user-token", {
-      id: 1,
-      username: "tom",
-      name: "Tom",
-      email: "tom@example.com",
-      role: "USER",
-    });
+    setCurrentUser("USER");
     vi.spyOn(api, "getTicketDetail").mockResolvedValue(ticketDetail);
 
     renderTicketDetailPage();
@@ -114,13 +146,7 @@ describe("TicketAiAssistantPanel", () => {
   });
 
   it("shows staff ticket actions and operation logs", async () => {
-    useAuthStore.getState().setSession("staff-token", {
-      id: 2,
-      username: "staff01",
-      name: "Staff One",
-      email: "staff01@example.com",
-      role: "STAFF",
-    });
+    setCurrentUser("STAFF");
     vi.spyOn(api, "getTicketDetail").mockResolvedValue(ticketDetail);
 
     renderTicketDetailPage();
@@ -132,13 +158,7 @@ describe("TicketAiAssistantPanel", () => {
   });
 
   it("loads current ticket logs from the ticket detail page", async () => {
-    useAuthStore.getState().setSession("staff-token", {
-      id: 2,
-      username: "staff01",
-      name: "Staff One",
-      email: "staff01@example.com",
-      role: "STAFF",
-    });
+    setCurrentUser("STAFF");
     vi.spyOn(api, "getTicketDetail").mockResolvedValue(ticketDetail);
     const logsMock = vi.spyOn(api, "getTicketLogs").mockResolvedValue({
       records: [
@@ -167,13 +187,7 @@ describe("TicketAiAssistantPanel", () => {
   });
 
   it("shows forbidden message when current ticket logs are not allowed", async () => {
-    useAuthStore.getState().setSession("staff-token", {
-      id: 2,
-      username: "staff01",
-      name: "Staff One",
-      email: "staff01@example.com",
-      role: "STAFF",
-    });
+    setCurrentUser("STAFF");
     vi.spyOn(api, "getTicketDetail").mockResolvedValue(ticketDetail);
     vi.spyOn(api, "getTicketLogs").mockRejectedValue(new ApiError("你没有权限查看操作日志", 403, 403));
 
@@ -187,20 +201,49 @@ describe("TicketAiAssistantPanel", () => {
   });
 
   it("shows admin-only detail actions", async () => {
-    useAuthStore.getState().setSession("admin-token", {
-      id: 3,
-      username: "admin01",
-      name: "Admin One",
-      email: "admin01@example.com",
-      role: "ADMIN",
-    });
+    setCurrentUser("ADMIN");
     vi.spyOn(api, "getTicketDetail").mockResolvedValue(ticketDetail);
 
     renderTicketDetailPage();
 
     expect(await screen.findByText("查看操作日志")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "分配处理人" })).toBeInTheDocument();
+    expect(screen.getByText("修改状态")).toBeInTheDocument();
+  });
+
+  it("lets admin assign and clear the ticket assignee from the detail page", async () => {
+    localStorage.setItem(languageStorageKey, "en");
+    setCurrentUser("ADMIN");
+    vi.spyOn(api, "getTicketDetail").mockResolvedValue({
+      ...ticketDetail,
+      ticket: {
+        ...ticketDetail.ticket,
+        assignedTo: 2,
+        assignedUserName: "Staff One",
+      },
+    });
+    vi.spyOn(api, "getUsers").mockResolvedValue([
+      { id: 1, username: "tom", name: "Tom", email: "tom@example.com", role: "USER" },
+      { id: 2, username: "staff01", name: "Staff One", email: "staff01@example.com", role: "STAFF" },
+      { id: 3, username: "admin01", name: "Admin One", email: "admin01@example.com", role: "ADMIN" },
+    ]);
+    const assignMock = vi.spyOn(api, "updateTicketAssignee").mockResolvedValue({
+      ...ticketDetail.ticket,
+      assignedTo: 3,
+      assignedUserName: "Admin One",
+    });
+
+    renderTicketDetailPage();
+
+    const assigneeSelect = await screen.findByRole("combobox", { name: "Assignee" });
+    expect(within(assigneeSelect).queryByRole("option", { name: /Tom/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Assign Ticket" })).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(assigneeSelect, "3");
+    await waitFor(() => expect(assignMock).toHaveBeenCalledWith(3, 3));
+
+    await userEvent.click(screen.getByRole("button", { name: "Clear assignee" }));
+    await waitFor(() => expect(assignMock).toHaveBeenCalledWith(3, null));
   });
 
   it("renders six AI action buttons", () => {
@@ -216,17 +259,7 @@ describe("TicketAiAssistantPanel", () => {
 
   it("calls aiChat with message and a stable conversationId only", async () => {
     stubStableCrypto();
-    const aiChatMock = vi.spyOn(api, "aiChat").mockResolvedValue({
-      type: "JSON_RESULT",
-      message: "回复建议生成完成",
-      data: {
-        suggestion: "请用户补充发票编号和截图。",
-        confidence: 0.82,
-        reason: "工单信息不足。",
-        risk_flags: ["需要人工确认"],
-      },
-      risk_flags: ["需要人工确认"],
-    });
+    const aiChatMock = vi.spyOn(api, "aiChat").mockResolvedValue(replySuggestionResponse());
 
     renderPanel();
     await userEvent.click(screen.getByRole("button", { name: "生成回复建议" }));
@@ -243,15 +276,7 @@ describe("TicketAiAssistantPanel", () => {
 
   it("renders all structured AI result cards", async () => {
     vi.spyOn(api, "aiChat")
-      .mockResolvedValueOnce({
-        type: "JSON_RESULT",
-        data: {
-          suggestion: "请用户补充发票编号和截图。",
-          confidence: 0.82,
-          reason: "当前描述缺少复现细节。",
-          risk_flags: ["需要人工确认"],
-        },
-      })
+      .mockResolvedValueOnce(replySuggestionResponse())
       .mockResolvedValueOnce({
         type: "JSON_RESULT",
         data: {
@@ -266,7 +291,7 @@ describe("TicketAiAssistantPanel", () => {
           suggested_priority: "HIGH",
           confidence: 0.76,
           reason: "影响报销流程。",
-          risk_flags: ["需要人工确认"],
+          risk_flags: riskFlags,
         },
       })
       .mockResolvedValueOnce({
@@ -286,7 +311,7 @@ describe("TicketAiAssistantPanel", () => {
               id: 12,
               title: "发票字段消失",
               status: "CLOSED",
-              similarity_reason: "都涉及发票数据保存失败",
+              similarity_reason: "都涉及发票数据保存失败。",
             },
           ],
           risk_flags: [],
@@ -304,7 +329,7 @@ describe("TicketAiAssistantPanel", () => {
 
     renderPanel();
     await userEvent.click(screen.getByRole("button", { name: "生成回复建议" }));
-    expect(await screen.findByText("请用户补充发票编号和截图。")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue(originalSuggestion)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "总结当前工单" }));
     expect(await screen.findByText("该工单涉及发票字段刷新后丢失。")).toBeInTheDocument();
@@ -325,27 +350,13 @@ describe("TicketAiAssistantPanel", () => {
   });
 
   it("does not show save or apply actions to USER AI result cards", async () => {
-    useAuthStore.getState().setSession("user-token", {
-      id: 1,
-      username: "tom",
-      name: "Tom",
-      email: "tom@example.com",
-      role: "USER",
-    });
-    vi.spyOn(api, "aiChat").mockResolvedValueOnce({
-      type: "JSON_RESULT",
-      data: {
-        suggestion: "请用户补充发票编号和截图。",
-        confidence: 0.82,
-        reason: "当前描述缺少复现细节。",
-        risk_flags: ["需要人工确认"],
-      },
-    });
+    setCurrentUser("USER");
+    vi.spyOn(api, "aiChat").mockResolvedValueOnce(replySuggestionResponse());
 
     renderPanel();
     await userEvent.click(screen.getByRole("button", { name: "生成回复建议" }));
 
-    expect(await screen.findByText("请用户补充发票编号和截图。")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue(originalSuggestion)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "保存 AI 回复" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "采纳分类" })).not.toBeInTheDocument();
   });
@@ -353,7 +364,7 @@ describe("TicketAiAssistantPanel", () => {
   it.each([
     ["STAFF", "staff-token"],
     ["ADMIN", "admin-token"],
-  ] as const)("shows save AI reply action to %s", async (role, token) => {
+  ] as const)("submits the edited AI reply suggestion for %s", async (role, token) => {
     stubStableCrypto();
     useAuthStore.getState().setSession(token, {
       id: role === "ADMIN" ? 3 : 2,
@@ -362,48 +373,43 @@ describe("TicketAiAssistantPanel", () => {
       email: role === "ADMIN" ? "admin01@example.com" : "staff01@example.com",
       role,
     });
-    vi.spyOn(api, "aiChat").mockResolvedValueOnce({
-      type: "JSON_RESULT",
-      data: {
-        suggestion: "请用户补充发票编号和截图。",
-        confidence: 0.82,
-        reason: "当前描述缺少复现细节。",
-        risk_flags: ["需要人工确认"],
-      },
-    });
+    vi.spyOn(api, "aiChat").mockResolvedValueOnce(replySuggestionResponse());
     const pendingMock = vi.spyOn(api, "createAiReplyPending").mockResolvedValue({
       type: "PENDING_CONFIRMATION",
-      message: "请确认是否保存该 AI 回复建议。",
+      message: "Please confirm saving this AI reply.",
       data: {
         actionType: "SAVE_AI_REPLY",
-        payload: { ticketId: 3, content: "请用户补充发票编号和截图。" },
+        payload: { ticketId: 3, replyContent: editedSuggestion },
       },
-      risk_flags: ["需要人工确认"],
+      risk_flags: riskFlags,
     });
 
     renderPanel();
     await userEvent.click(screen.getByRole("button", { name: "生成回复建议" }));
-    await userEvent.click(await screen.findByRole("button", { name: "保存 AI 回复" }));
+    const draft = await screen.findByDisplayValue(originalSuggestion);
+    await userEvent.clear(draft);
+    await userEvent.type(draft, editedSuggestion);
+    await userEvent.click(screen.getByRole("button", { name: "保存 AI 回复" }));
 
     await waitFor(() =>
       expect(pendingMock).toHaveBeenCalledWith(
         3,
-        "detail-conversation",
-        "请用户补充发票编号和截图。",
+        expect.objectContaining({
+          conversationId: "detail-conversation",
+          suggestion: editedSuggestion,
+          originalSuggestion,
+          confidence: 0.82,
+          reason: suggestionReason,
+          riskFlags,
+        }),
       ),
     );
-    expect(await screen.findByText("待确认操作")).toBeInTheDocument();
+    expect(await screen.findByText("Please confirm saving this AI reply.")).toBeInTheDocument();
   });
 
   it("shows apply category action to staff and creates a pending action", async () => {
     stubStableCrypto();
-    useAuthStore.getState().setSession("staff-token", {
-      id: 2,
-      username: "staff01",
-      name: "Staff One",
-      email: "staff01@example.com",
-      role: "STAFF",
-    });
+    setCurrentUser("STAFF");
     vi.spyOn(api, "aiChat").mockResolvedValueOnce({
       type: "JSON_RESULT",
       data: {
@@ -420,7 +426,7 @@ describe("TicketAiAssistantPanel", () => {
         actionType: "APPLY_AI_CATEGORY",
         payload: { ticketId: 3, category: "发票财务" },
       },
-      risk_flags: ["需要人工确认"],
+      risk_flags: riskFlags,
     });
 
     renderPanel();
@@ -439,13 +445,7 @@ describe("TicketAiAssistantPanel", () => {
   });
 
   it("does not show write actions for priority or SLA result cards", async () => {
-    useAuthStore.getState().setSession("staff-token", {
-      id: 2,
-      username: "staff01",
-      name: "Staff One",
-      email: "staff01@example.com",
-      role: "STAFF",
-    });
+    setCurrentUser("STAFF");
     vi.spyOn(api, "aiChat")
       .mockResolvedValueOnce({
         type: "JSON_RESULT",
@@ -453,7 +453,7 @@ describe("TicketAiAssistantPanel", () => {
           suggested_priority: "HIGH",
           confidence: 0.76,
           reason: "影响报销流程。",
-          risk_flags: ["需要人工确认"],
+          risk_flags: riskFlags,
         },
       })
       .mockResolvedValueOnce({
@@ -480,13 +480,7 @@ describe("TicketAiAssistantPanel", () => {
 
   it("keeps forbidden results without clearing auth", async () => {
     vi.spyOn(api, "aiChat").mockRejectedValue(new ApiError("你没有权限执行该操作。", 403, 403));
-    useAuthStore.getState().setSession("keep-token", {
-      id: 1,
-      username: "tom",
-      name: "Tom",
-      email: "tom@example.com",
-      role: "USER",
-    });
+    setCurrentUser("USER");
 
     renderPanel();
     await userEvent.click(screen.getByRole("button", { name: "生成回复建议" }));
@@ -494,7 +488,7 @@ describe("TicketAiAssistantPanel", () => {
     expect(await screen.findByText("权限不足")).toBeInTheDocument();
     expect(screen.getByText("你没有权限执行该操作。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
-    expect(useAuthStore.getState().token).toBe("keep-token");
+    expect(useAuthStore.getState().token).toBe("user-token");
   });
 
   it("shows errors with retry and reuses the original message and conversationId", async () => {
@@ -520,35 +514,91 @@ describe("TicketAiAssistantPanel", () => {
 
   it("renders pending actions and confirms or cancels with the current conversationId", async () => {
     stubStableCrypto();
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
     const aiChatMock = vi
       .spyOn(api, "aiChat")
       .mockResolvedValueOnce({
         type: "PENDING_CONFIRMATION",
-        message: "请确认是否保存 AI 回复。",
+        message: "Please confirm saving this AI reply.",
         data: {
           actionType: "SAVE_AI_REPLY",
-          payload: { ticket_id: 3, content: "建议回复内容" },
+          payload: { ticketId: 3, replyContent: "AI suggested reply" },
         },
-        risk_flags: ["需要人工确认"],
+        risk_flags: ["needs human review"],
       })
-      .mockResolvedValue({
+      .mockResolvedValueOnce({
         type: "NORMAL",
-        message: "已处理。",
+        message: "cancelled",
+        data: null,
+      })
+      .mockResolvedValueOnce({
+        type: "PENDING_CONFIRMATION",
+        message: "Please confirm saving this AI reply.",
+        data: {
+          actionType: "SAVE_AI_REPLY",
+          payload: { ticketId: 3, replyContent: "AI suggested reply" },
+        },
+        risk_flags: ["needs human review"],
+      })
+      .mockResolvedValueOnce({
+        type: "NORMAL",
+        message: "confirmed",
         data: null,
       });
 
     renderPanel();
     await userEvent.click(screen.getByRole("button", { name: "生成回复建议" }));
 
-    expect(await screen.findByText("待确认操作")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /确认执行/ }));
+    expect(await screen.findByText("Please confirm saving this AI reply.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "取消操作" }));
     await waitFor(() => expect(aiChatMock).toHaveBeenCalledTimes(2));
 
-    await userEvent.click(screen.getByRole("button", { name: /取消操作/ }));
-    await waitFor(() => expect(aiChatMock).toHaveBeenCalledTimes(3));
+    await userEvent.click(screen.getByRole("button", { name: "生成回复建议" }));
+    expect(await screen.findByText("Please confirm saving this AI reply.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "确认执行" }));
+    await waitFor(() => expect(aiChatMock).toHaveBeenCalledTimes(4));
 
-    expect(aiChatMock.mock.calls[1]).toEqual(["确认", "detail-conversation"]);
-    expect(aiChatMock.mock.calls[2]).toEqual(["取消", "detail-conversation"]);
+    expect(aiChatMock.mock.calls[1]).toEqual(["取消", "detail-conversation"]);
+    expect(aiChatMock.mock.calls[3]).toEqual(["确认", "detail-conversation"]);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["ticket-detail", 3] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["ticket-logs", 3] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["tickets"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["logs"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["admin-dashboard-stats"] });
+  });
+
+  it("clears local AI drafts after confirming a saved AI reply", async () => {
+    stubStableCrypto();
+    setCurrentUser("STAFF");
+    const aiChatMock = vi
+      .spyOn(api, "aiChat")
+      .mockResolvedValueOnce(replySuggestionResponse())
+      .mockResolvedValueOnce({
+        type: "NORMAL",
+        message: "confirmed",
+        data: null,
+      });
+    vi.spyOn(api, "createAiReplyPending").mockResolvedValue({
+      type: "PENDING_CONFIRMATION",
+      message: "Please confirm saving this AI reply.",
+      data: {
+        actionType: "SAVE_AI_REPLY",
+        payload: { ticketId: 3, replyContent: editedSuggestion },
+      },
+      risk_flags: riskFlags,
+    });
+
+    renderPanel();
+    await userEvent.click(screen.getByRole("button", { name: "生成回复建议" }));
+    const draft = await screen.findByDisplayValue(originalSuggestion);
+    await userEvent.clear(draft);
+    await userEvent.type(draft, editedSuggestion);
+    await userEvent.click(screen.getByRole("button", { name: "保存 AI 回复" }));
+    await userEvent.click(await screen.findByRole("button", { name: "确认执行" }));
+
+    await waitFor(() => expect(aiChatMock).toHaveBeenCalledWith("确认", "detail-conversation"));
+    await waitFor(() => expect(screen.queryByDisplayValue(editedSuggestion)).not.toBeInTheDocument());
+    expect(screen.queryByText("Please confirm saving this AI reply.")).not.toBeInTheDocument();
   });
 
   it("keeps the same conversationId after language switching", async () => {
@@ -571,5 +621,6 @@ describe("TicketAiAssistantPanel", () => {
 
     expect(aiChatMock.mock.calls[0][1]).toBe("detail-conversation");
     expect(aiChatMock.mock.calls[1][1]).toBe("detail-conversation");
+    expect(within(screen.getByRole("button", { name: "Language" })).getByText("中文")).toBeInTheDocument();
   });
 });

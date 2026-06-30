@@ -104,9 +104,34 @@ public class AiPendingActionService {
     public AiPendingConfirmationResponse createSaveAiReplyPending(
             Long ticketId,
             AiReplyPendingRequest request) {
+        String replyContent = requireRequestText(
+                firstNonBlank(
+                        request == null ? null : request.getSuggestion(),
+                        request == null ? null : request.getContent()
+                ),
+                "suggestion"
+        );
+
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("ticketId", requirePositiveId(ticketId, "ticketId"));
-        payload.put("content", requireRequestText(request == null ? null : request.getContent(), "content"));
+        payload.put("replyContent", replyContent);
+        payload.put("content", replyContent);
+        String originalSuggestion = optionalRequestText(request == null ? null : request.getOriginalSuggestion());
+        if (originalSuggestion != null) {
+            payload.put("originalSuggestion", originalSuggestion);
+        }
+        if (request != null && request.getConfidence() != null) {
+            payload.put("confidence", request.getConfidence());
+        }
+        String reason = optionalRequestText(request == null ? null : request.getReason());
+        if (reason != null) {
+            payload.put("reason", reason);
+        }
+        if (request != null && request.getRiskFlags() != null) {
+            payload.put("riskFlags", request.getRiskFlags());
+        } else {
+            payload.put("riskFlags", java.util.List.of());
+        }
         payload.put("source", "AI_REPLY_SUGGESTION");
 
         AiPendingActionResponse pendingAction = createPendingAction(
@@ -336,7 +361,7 @@ public class AiPendingActionService {
         if (actionType == AiPendingActionType.SAVE_AI_REPLY) {
             Long ticketId = requireLong(payload, "ticketId");
             AiReplyCreateDTO dto = new AiReplyCreateDTO();
-            dto.setContent(requireText(payload, "content"));
+            dto.setContent(requireReplyContent(payload));
             TicketReply reply = ticketReplyService.createAiReply(ticketId, dto);
             return reply;
         }
@@ -400,7 +425,8 @@ public class AiPendingActionService {
         }
         if (actionType == AiPendingActionType.SAVE_AI_REPLY) {
             requireLong(payload, "ticketId");
-            requireMaxLength(requireText(payload, "content"), "content", 2000);
+            requireMaxLength(requireReplyContent(payload), "suggestion", 2000);
+            validateOptionalConfidence(payload.get("confidence"));
             return;
         }
         if (actionType == AiPendingActionType.APPLY_AI_CATEGORY) {
@@ -523,6 +549,22 @@ public class AiPendingActionService {
             throw new BusinessException(400, key + "不能为空");
         }
         return text;
+    }
+
+    private String requireReplyContent(Map<String, Object> payload) {
+        Object replyContent = payload.get("replyContent");
+        if (replyContent != null) {
+            String text = String.valueOf(replyContent).trim();
+            if (!text.isEmpty()) {
+                return text;
+            }
+        }
+        return requireText(payload, "content");
+    }
+
+    private String firstNonBlank(String first, String second) {
+        String firstText = optionalRequestText(first);
+        return firstText == null ? optionalRequestText(second) : firstText;
     }
 
     private String optionalRequestText(String value) {

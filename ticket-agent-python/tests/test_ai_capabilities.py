@@ -64,6 +64,39 @@ def test_sla_risk_capability_returns_missing_fields_without_exact_time() -> None
     assert "还有" not in result.reason
 
 
+def test_sla_risk_capability_uses_java_overdue_status() -> None:
+    result = SlaRiskService(
+        java_ticket_client=StaticJavaClient(sla_ticket_detail("OVERDUE", True, -30))
+    ).check(auth_token="java-token", ticket_id=1)
+
+    assert result.sla_risk_level == "HIGH"
+    assert result.missing_fields == []
+    assert "该工单已超过 SLA 解决截止时间" in result.risk_flags
+    assert "slaStatus=OVERDUE" in result.reason
+
+
+def test_sla_risk_capability_uses_java_at_risk_status() -> None:
+    result = SlaRiskService(
+        java_ticket_client=StaticJavaClient(sla_ticket_detail("AT_RISK", False, 120))
+    ).check(auth_token="java-token", ticket_id=1)
+
+    assert result.sla_risk_level == "MEDIUM"
+    assert result.missing_fields == []
+    assert "该工单接近 SLA 解决截止时间" in result.risk_flags
+    assert "slaStatus=AT_RISK" in result.reason
+
+
+def test_sla_risk_capability_does_not_invent_risk_when_on_track() -> None:
+    result = SlaRiskService(
+        java_ticket_client=StaticJavaClient(sla_ticket_detail("ON_TRACK", False, 900))
+    ).check(auth_token="java-token", ticket_id=1)
+
+    assert result.sla_risk_level == "LOW"
+    assert result.missing_fields == []
+    assert "该工单已超过 SLA 解决截止时间" not in result.risk_flags
+    assert "该工单接近 SLA 解决截止时间" not in result.risk_flags
+
+
 @pytest.mark.parametrize(
     ("service", "method_name"),
     [
@@ -203,6 +236,39 @@ def normal_ticket_detail() -> TicketDetailDTO:
                 "content": "用户输入正确密码后仍提示错误，无法进入系统。",
                 "status": "OPEN",
                 "priority": "HIGH",
+            },
+            "replies": [
+                {
+                    "id": 1,
+                    "ticketId": 1,
+                    "content": "请用户补充错误截图。",
+                    "replyType": "STAFF",
+                    "createdAt": "2026-06-16 10:00:00",
+                }
+            ],
+        }
+    )
+
+
+def sla_ticket_detail(
+    sla_status: str,
+    sla_overdue: bool,
+    sla_remaining_minutes: int,
+) -> TicketDetailDTO:
+    return TicketDetailDTO.from_java_detail(
+        {
+            "ticket": {
+                "id": 1,
+                "title": "登录失败",
+                "content": "用户输入正确密码后仍提示错误，无法进入系统。",
+                "status": "OPEN",
+                "priority": "HIGH",
+                "responseDueAt": "2026-06-30T12:00:00",
+                "resolveDueAt": "2026-07-01T10:00:00",
+                "closedAt": None,
+                "slaStatus": sla_status,
+                "slaOverdue": sla_overdue,
+                "slaRemainingMinutes": sla_remaining_minutes,
             },
             "replies": [
                 {

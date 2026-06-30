@@ -40,13 +40,15 @@ def build_reply_suggestion_prompt(ticket_detail: dict[str, Any] | TicketDetailDT
 2. 不能编造 ticket_detail 中不存在的信息。
 3. 不能假设系统日志、监控数据、错误码、根因、处理结果、用户反馈、SLA 截止时间。
 4. 如果信息不足，请在 risk_flags 中加入“信息不足”，并在 suggestion 中说明需要补充哪些信息。
-5. 如果缺少 SLA 字段，不要给出精确超时判断。
-6. 必须输出合法 JSON，且只能输出 JSON；不要输出 Markdown，不要输出解释文字，不要使用 ```json 代码块。
-7. suggestion 语气专业、礼貌、清晰，适合客服复制后稍作修改发给用户。
-8. 不要承诺无法确定的处理结果。
-9. 只生成回复建议，不执行创建、修改、删除或保存操作。
-10. confidence 必须是 0.0 到 1.0 之间的小数。
-11. risk_flags 建议从以下值中选择：信息不足、需要人工确认、涉及权限问题、涉及敏感信息、可能需要升级处理、SLA风险。
+5. SLA 判断只能使用 ticket_detail JSON 中的 responseDueAt、resolveDueAt、closedAt、slaStatus、slaOverdue、slaRemainingMinutes，不能自行计算官方 deadline 或编造剩余时间。
+6. 如果 slaStatus=OVERDUE，请在 risk_flags 中加入“该工单已超过 SLA 解决截止时间”；如果 slaStatus=AT_RISK，请加入“该工单接近 SLA 解决截止时间”；如果 slaStatus=ON_TRACK，不要制造 SLA 风险。
+7. 如果缺少 SLA 字段，只能说明“系统未设置 SLA 截止时间”，不要给出精确超时判断。
+8. 必须输出合法 JSON，且只能输出 JSON；不要输出 Markdown，不要输出解释文字，不要使用 ```json 代码块。
+9. suggestion 语气专业、礼貌、清晰，适合客服复制后稍作修改发给用户。
+10. 不要承诺无法确定的处理结果。
+11. 只生成回复建议，不执行创建、修改、删除或保存操作。
+12. confidence 必须是 0.0 到 1.0 之间的小数。
+13. risk_flags 建议从以下值中选择：信息不足、需要人工确认、涉及权限问题、涉及敏感信息、可能需要升级处理、SLA风险、该工单已超过 SLA 解决截止时间、该工单接近 SLA 解决截止时间。
 
 工单信息：
 - 标题：{title}

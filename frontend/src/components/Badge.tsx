@@ -1,7 +1,7 @@
 import { clsx } from "clsx";
 import type { ReactNode } from "react";
-import { formatPriority, formatTicketStatus, useI18n } from "../i18n";
-import type { TicketPriority, TicketStatus } from "../types/domain";
+import { formatPriority, formatSlaStatus, formatTicketStatus, useI18n } from "../i18n";
+import type { TicketPriority, TicketSlaStatus, TicketStatus } from "../types/domain";
 
 const statusClasses: Record<TicketStatus, string> = {
   OPEN: "bg-sky-50 text-sky-700 ring-sky-200",
@@ -16,6 +16,14 @@ const priorityClasses: Record<TicketPriority, string> = {
   URGENT: "bg-red-50 text-red-700 ring-red-200",
 };
 
+const slaClasses: Record<TicketSlaStatus, string> = {
+  NO_SLA: "bg-slate-50 text-slate-600 ring-slate-200",
+  ON_TRACK: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  AT_RISK: "bg-amber-50 text-amber-700 ring-amber-200",
+  OVERDUE: "bg-red-50 text-red-700 ring-red-200",
+  COMPLETED: "bg-slate-50 text-slate-600 ring-slate-200",
+};
+
 export function StatusBadge({ status }: { status: TicketStatus }) {
   const { t } = useI18n();
   return <Badge className={statusClasses[status]}>{formatTicketStatus(status, t)}</Badge>;
@@ -24,6 +32,12 @@ export function StatusBadge({ status }: { status: TicketStatus }) {
 export function PriorityBadge({ priority }: { priority: TicketPriority }) {
   const { t } = useI18n();
   return <Badge className={priorityClasses[priority]}>{formatPriority(priority, t)}</Badge>;
+}
+
+export function SlaBadge({ status }: { status?: TicketSlaStatus | null }) {
+  const { t } = useI18n();
+  const safeStatus = status ?? "NO_SLA";
+  return <Badge className={slaClasses[safeStatus]}>{formatSlaStatus(safeStatus, t)}</Badge>;
 }
 
 export function Badge({

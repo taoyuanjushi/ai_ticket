@@ -13,6 +13,7 @@ from app.services.guardrail_service import GuardrailService
 GROUNDING_RULES = """你只能使用 ticket_detail 中的信息。
 不能编造 ticket_detail 中不存在的事实。
 不能假设系统日志、监控数据、错误码、根因、处理结果、用户反馈、SLA 截止时间。
+SLA 判断必须基于 Java 返回的 responseDueAt、resolveDueAt、closedAt、slaStatus、slaOverdue、slaRemainingMinutes，不能自行计算官方 deadline 或编造剩余时间。
 如果信息不足，请明确说明“信息不足”，并在 risk_flags 中加入“信息不足”。
 如果缺少 SLA 字段，请在 missing_fields 中列出缺失字段，并在 risk_flags 中加入“SLA字段不足”。
 必须只输出合法 JSON，不要输出 Markdown，不要输出解释性文字。"""
@@ -217,6 +218,10 @@ ticket_detail JSON：
                 "lastReplyAt": ticket_detail.lastReplyAt,
                 "responseDueAt": ticket_detail.responseDueAt,
                 "resolveDueAt": ticket_detail.resolveDueAt,
+                "closedAt": ticket_detail.closedAt,
+                "slaStatus": self._enum_value(ticket_detail.slaStatus),
+                "slaOverdue": ticket_detail.slaOverdue,
+                "slaRemainingMinutes": ticket_detail.slaRemainingMinutes,
             }
         )
         context["replies"] = [

@@ -1,6 +1,7 @@
 export type UserRole = "USER" | "STAFF" | "ADMIN";
 export type TicketStatus = "OPEN" | "PROCESSING" | "CLOSED";
 export type TicketPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+export type TicketSlaStatus = "NO_SLA" | "ON_TRACK" | "AT_RISK" | "OVERDUE" | "COMPLETED";
 export type ReplyType = "USER" | "STAFF" | "AI";
 export type BusinessType = "AUTH" | "USER" | "TICKET" | "TICKET_REPLY" | "AI_PENDING_ACTION";
 
@@ -68,6 +69,8 @@ export interface DashboardStats {
   aiSuggestionCount?: number | null;
   aiAcceptedCount?: number | null;
   aiAcceptanceRate?: number | null;
+  slaAtRiskCount?: number | null;
+  slaOverdueCount?: number | null;
 }
 
 export interface CurrentUser {
@@ -102,6 +105,12 @@ export interface Ticket {
   assignedTo?: number | null;
   assignedUserName?: string | null;
   userId: number;
+  responseDueAt?: string | null;
+  resolveDueAt?: string | null;
+  closedAt?: string | null;
+  slaStatus?: TicketSlaStatus | null;
+  slaOverdue?: boolean | null;
+  slaRemainingMinutes?: number | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -131,6 +140,7 @@ export interface TicketQuery {
   priority?: TicketPriority | "";
   category?: string;
   keyword?: string;
+  assignedTo?: string;
 }
 
 export interface TicketCreateInput {

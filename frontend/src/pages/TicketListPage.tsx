@@ -3,37 +3,58 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Filter, PlusCircle, RefreshCw, Sparkles, Ticket as TicketIcon } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, priorityOptions, statusOptions } from "../api/client";
-import { canCreateTicket, isStaff, normalizeRole } from "../auth/permissions";
+import { canCreateTicket, isAdmin, isStaff, normalizeRole } from "../auth/permissions";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { Field, SelectInput, TextInput } from "../components/Field";
 import { Loading } from "../components/Loading";
 import { PageHeader } from "../components/PageHeader";
-import { PriorityBadge, StatusBadge } from "../components/Badge";
+import { PriorityBadge, SlaBadge, StatusBadge } from "../components/Badge";
 import { StatCard } from "../components/StatCard";
 import { formatPriority, formatTicketStatus, useI18n } from "../i18n";
 import { useAuthStore } from "../state/authStore";
-import type { TicketPriority, TicketStatus } from "../types/domain";
+import type { TicketPriority, TicketStatus, User } from "../types/domain";
+
+type TicketListDraft = {
+  page: number;
+  size: number;
+  status: TicketStatus | "";
+  priority: TicketPriority | "";
+  category: string;
+  keyword: string;
+  assignedTo: string;
+};
 
 export function TicketListPage() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const role = normalizeRole(useAuthStore((state) => state.user?.role));
+  const isAdminRole = isAdmin(role);
+  const canFilterAssignee = isStaff(role);
   const { lang, t } = useI18n();
-  const [draft, setDraft] = useState({
+  const [draft, setDraft] = useState<TicketListDraft>({
     page: Number(params.get("page") ?? 1),
     size: Number(params.get("size") ?? 10),
     status: (params.get("status") ?? "") as TicketStatus | "",
     priority: (params.get("priority") ?? "") as TicketPriority | "",
     category: params.get("category") ?? "",
     keyword: params.get("keyword") ?? "",
+    assignedTo: canFilterAssignee ? (params.get("assignedTo") ?? "") : "",
   });
 
   const ticketsQuery = useQuery({
     queryKey: ["tickets", draft],
     queryFn: () => api.getTickets(draft),
   });
+
+  const usersQuery = useQuery({
+    queryKey: ["users"],
+    queryFn: api.getUsers,
+    enabled: isAdminRole,
+  });
+
+  const assignableUsers = usersQuery.data?.filter((user) => user.role === "STAFF" || user.role === "ADMIN") ?? [];
 
   const stats = useMemo(() => {
     const records = ticketsQuery.data?.records ?? [];
@@ -75,7 +96,13 @@ export function TicketListPage() {
       </div>
 
       <div className="px-5 pb-4">
-        <div className="grid gap-4 rounded border border-line bg-white p-4 xl:grid-cols-[1.5fr_1fr_1fr_1fr_1fr_auto]">
+        <div
+          className={`grid gap-4 rounded border border-line bg-white p-4 ${
+            canFilterAssignee
+              ? "xl:grid-cols-[1.5fr_repeat(5,minmax(0,1fr))_auto]"
+              : "xl:grid-cols-[1.5fr_1fr_1fr_1fr_1fr_auto]"
+          }`}
+        >
           <Field label={t("ticket.keyword")}>
             <TextInput
               value={draft.keyword}
@@ -116,6 +143,26 @@ export function TicketListPage() {
               onChange={(event) => setDraft((prev) => ({ ...prev, category: event.target.value }))}
             />
           </Field>
+          {canFilterAssignee ? (
+            <Field label={t("ticket.assignee")}>
+              <SelectInput
+                value={draft.assignedTo}
+                disabled={isAdminRole && usersQuery.isLoading}
+                onChange={(event) => setDraft((prev) => ({ ...prev, assignedTo: event.target.value, page: 1 }))}
+              >
+                <option value="">{t("common.all")}</option>
+                <option value="me">{t("ticket.assignedToMeFilter")}</option>
+                <option value="unassigned">{t("ticket.unassigned")}</option>
+                {isAdminRole
+                  ? assignableUsers.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {formatAssigneeOption(user)}
+                      </option>
+                    ))
+                  : null}
+              </SelectInput>
+            </Field>
+          ) : null}
           <Field label={t("common.pageSize")}>
             <SelectInput
               value={String(draft.size)}
@@ -150,6 +197,7 @@ export function TicketListPage() {
                       <th className="px-4 py-3">{t("ticket.status")}</th>
                       <th className="px-4 py-3">{t("ticket.priority")}</th>
                       <th className="px-4 py-3">{t("ticket.category")}</th>
+                      <th className="px-4 py-3">{t("ticket.sla")}</th>
                       <th className="px-4 py-3">{t("common.owner")}</th>
                       <th className="px-4 py-3">{t("common.updated")}</th>
                       <th className="px-4 py-3"></th>
@@ -172,6 +220,12 @@ export function TicketListPage() {
                           <PriorityBadge priority={ticket.priority} />
                         </td>
                         <td className="px-4 py-3 text-muted">{ticket.category}</td>
+                        <td className="px-4 py-3">
+                          <div className="grid gap-1">
+                            <SlaBadge status={ticket.slaStatus} />
+                            <span className="text-xs text-muted">{formatTime(ticket.resolveDueAt ?? undefined, lang)}</span>
+                          </div>
+                        </td>
                         <td className="px-4 py-3 text-muted">#{ticket.userId}</td>
                         <td className="px-4 py-3 text-muted">{formatTime(ticket.updatedAt, lang)}</td>
                         <td className="px-4 py-3">
@@ -207,9 +261,15 @@ function cleanParams(draft: {
   priority: TicketPriority | "";
   category: string;
   keyword: string;
+  assignedTo: string;
 }) {
   const entries = Object.entries(draft).filter(([, value]) => value !== "");
   return Object.fromEntries(entries.map(([key, value]) => [key, String(value)]));
+}
+
+function formatAssigneeOption(user: User) {
+  const displayName = user.name?.trim() || user.username;
+  return `#${user.id} ${displayName} (${user.role})`;
 }
 
 function formatTime(value: string | undefined, lang: string) {

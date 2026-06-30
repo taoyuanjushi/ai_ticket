@@ -6,6 +6,7 @@ import {
   ListTodo,
   Sparkles,
   Ticket,
+  TimerOff,
   Zap,
 } from "lucide-react";
 import { api } from "../api/client";
@@ -28,6 +29,8 @@ const emptyStats: Required<DashboardStats> = {
   aiSuggestionCount: 0,
   aiAcceptedCount: 0,
   aiAcceptanceRate: 0,
+  slaAtRiskCount: 0,
+  slaOverdueCount: 0,
 };
 
 export function DashboardPage() {
@@ -47,7 +50,7 @@ export function DashboardPage() {
   return (
     <div>
       <PageHeader eyebrow={t("dashboard.eyebrow")} title={t("dashboard.title")} description={t("dashboard.description")} />
-      <div className="grid gap-4 px-5 py-5 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 px-5 py-5 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label={t("dashboard.ticketTotal")} value={numberValue(stats.ticketTotal)} icon={Ticket} tone="blue" />
         <StatCard label={t("dashboard.pendingCount")} value={numberValue(stats.pendingCount)} icon={ListTodo} tone="amber" />
         <StatCard label={t("dashboard.processingCount")} value={numberValue(stats.processingCount)} icon={Clock3} tone="blue" />
@@ -55,6 +58,8 @@ export function DashboardPage() {
         <StatCard label={t("dashboard.closedCount")} value={numberValue(stats.closedCount)} icon={CheckCircle2} tone="green" />
         <StatCard label={t("dashboard.highPriorityCount")} value={numberValue(stats.highPriorityCount)} icon={Flame} tone="red" />
         <StatCard label={t("dashboard.urgentPriorityCount")} value={numberValue(stats.urgentPriorityCount)} icon={Zap} tone="red" />
+        <StatCard label={t("dashboard.slaAtRiskCount")} value={numberValue(stats.slaAtRiskCount)} icon={Clock3} tone="amber" />
+        <StatCard label={t("dashboard.slaOverdueCount")} value={numberValue(stats.slaOverdueCount)} icon={TimerOff} tone="red" />
         <StatCard label={t("dashboard.aiSuggestionCount")} value={numberValue(stats.aiSuggestionCount)} icon={Sparkles} tone="blue" />
         <StatCard label={t("dashboard.aiAcceptedCount")} value={numberValue(stats.aiAcceptedCount)} icon={Sparkles} tone="green" />
         <StatCard label={t("dashboard.aiAcceptanceRate")} value={percentValue(stats.aiAcceptanceRate)} icon={Sparkles} tone="amber" />
@@ -74,4 +79,3 @@ function numberValue(value: number | null | undefined) {
 function percentValue(value: number | null | undefined) {
   return `${((value ?? 0) * 100).toFixed(1)}%`;
 }
-

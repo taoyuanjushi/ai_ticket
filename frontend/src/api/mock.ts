@@ -11,6 +11,7 @@ import type {
   TicketDetail,
   TicketPriority,
   TicketReply,
+  TicketSlaStatus,
   TicketStatus,
   User,
 } from "../types/domain";
@@ -32,11 +33,11 @@ const users: User[] = [
 ];
 
 let tickets: Ticket[] = [
-  makeTicket(1, "Login failure", "User cannot sign in even with the correct password.", "OPEN", "HIGH", "ACCOUNT", 1, -75),
-  makeTicket(2, "Slow dashboard", "The support dashboard takes more than eight seconds to load.", "PROCESSING", "MEDIUM", "SYSTEM", 1, -180),
+  makeTicket(1, "Login failure", "User cannot sign in even with the correct password.", "OPEN", "HIGH", "ACCOUNT", 1, -75, 2),
+  makeTicket(2, "Slow dashboard", "The support dashboard takes more than eight seconds to load.", "PROCESSING", "MEDIUM", "SYSTEM", 1, -180, 2),
   makeTicket(3, "Invoice data not saved", "Invoice fields disappear after refresh.", "OPEN", "URGENT", "BILLING", 1, -45),
   makeTicket(4, "Delayed email notifications", "Status change emails are delayed.", "CLOSED", "LOW", "NOTIFICATION", 1, -480),
-  makeTicket(5, "Mobile layout issue", "The reply box overlaps the submit button on narrow screens.", "PROCESSING", "HIGH", "FRONTEND", 1, -260),
+  makeTicket(5, "Mobile layout issue", "The reply box overlaps the submit button on narrow screens.", "PROCESSING", "HIGH", "FRONTEND", 1, -260, 3),
   makeTicket(6, "Permission question", "User cannot see reply history and needs policy confirmation.", "OPEN", "MEDIUM", "PERMISSION", 1, -30),
 ];
 
@@ -124,6 +125,10 @@ export async function mockFetch<T>(path: string, options: MockOptions = {}): Pro
     const body = options.body as { status: TicketStatus };
     ticket.status = body.status;
     ticket.updatedAt = now();
+    if (body.status === "CLOSED" && !ticket.closedAt) {
+      ticket.closedAt = ticket.updatedAt;
+    }
+    applyTicketSlaSnapshot(ticket);
     logs.unshift(makeLog(nextId(logs), currentUser().id, "UPDATE_TICKET_STATUS", "TICKET", ticket.id, `Ticket #${ticket.id} changed to ${body.status}`, 0));
     return ticket as T;
   }
@@ -143,13 +148,27 @@ export async function mockFetch<T>(path: string, options: MockOptions = {}): Pro
 
   const aiReplyPendingMatch = route.match(/^\/tickets\/(\d+)\/ai-replies\/pending$/);
   if (aiReplyPendingMatch && method === "POST") {
-    const body = options.body as { conversationId: string; content: string };
+    const body = options.body as {
+      conversationId: string;
+      suggestion?: string;
+      originalSuggestion?: string;
+      confidence?: number;
+      reason?: string;
+      riskFlags?: string[];
+      content?: string;
+    };
+    const replyContent = body.suggestion ?? body.content ?? "";
     return buildPendingResponse(
       "请确认是否保存该 AI 回复建议。",
       "SAVE_AI_REPLY",
       {
         ticketId: Number(aiReplyPendingMatch[1]),
-        content: body.content,
+        replyContent,
+        content: replyContent,
+        originalSuggestion: body.originalSuggestion,
+        confidence: body.confidence,
+        reason: body.reason,
+        riskFlags: body.riskFlags ?? [],
       },
     ) as T;
   }
@@ -173,6 +192,10 @@ export async function mockFetch<T>(path: string, options: MockOptions = {}): Pro
   if (ticketMatch && method === "PUT") {
     const ticket = findTicket(Number(ticketMatch[1]));
     Object.assign(ticket, options.body, { updatedAt: now() });
+    if (ticket.status === "CLOSED" && !ticket.closedAt) {
+      ticket.closedAt = ticket.updatedAt;
+    }
+    applyTicketSlaSnapshot(ticket);
     return true as T;
   }
 
@@ -285,15 +308,25 @@ function listTickets(query: Record<string, string | number | undefined | null>):
   const priority = query.priority ? String(query.priority) : "";
   const category = query.category ? String(query.category).toUpperCase() : "";
   const keyword = query.keyword ? String(query.keyword).toLowerCase() : "";
+  const assignedTo = query.assignedTo ? String(query.assignedTo) : "";
   const user = currentUser();
 
-  let result = [...tickets];
+  let result = tickets.map((ticket) => applyTicketSlaSnapshot(ticket));
   if (user.role === "USER") {
     result = result.filter((ticket) => ticket.userId === user.id);
   }
   if (status) result = result.filter((ticket) => ticket.status === status);
   if (priority) result = result.filter((ticket) => ticket.priority === priority);
   if (category) result = result.filter((ticket) => (ticket.category ?? "").toUpperCase() === category);
+  if (assignedTo) {
+    if (assignedTo.toLowerCase() === "me") {
+      result = result.filter((ticket) => ticket.assignedTo === user.id);
+    } else if (assignedTo.toLowerCase() === "unassigned") {
+      result = result.filter((ticket) => ticket.assignedTo == null);
+    } else {
+      result = result.filter((ticket) => ticket.assignedTo === Number(assignedTo));
+    }
+  }
   if (keyword) {
     result = result.filter((ticket) => ticket.title.toLowerCase().includes(keyword) || ticket.content.toLowerCase().includes(keyword));
   }
@@ -316,6 +349,7 @@ function listLogs(query: Record<string, string | number | undefined | null>): Pa
 function buildDashboardStats(): DashboardStats {
   const aiSuggestionCount = logs.filter((log) => log.action === "AI_REPLY_SUGGESTION").length;
   const aiAcceptedCount = logs.filter((log) => log.action === "AI_REPLY_CONFIRMED").length;
+  const activeTickets = tickets.map((ticket) => applyTicketSlaSnapshot(ticket)).filter((ticket) => ticket.status !== "CLOSED");
   return {
     ticketTotal: tickets.length,
     pendingCount: tickets.filter((ticket) => ticket.status === "OPEN").length,
@@ -324,6 +358,8 @@ function buildDashboardStats(): DashboardStats {
     closedCount: tickets.filter((ticket) => ticket.status === "CLOSED").length,
     highPriorityCount: tickets.filter((ticket) => ticket.priority === "HIGH").length,
     urgentPriorityCount: tickets.filter((ticket) => ticket.priority === "URGENT").length,
+    slaAtRiskCount: activeTickets.filter((ticket) => ticket.slaStatus === "AT_RISK").length,
+    slaOverdueCount: activeTickets.filter((ticket) => ticket.slaStatus === "OVERDUE").length,
     aiSuggestionCount,
     aiAcceptedCount,
     aiAcceptanceRate: aiSuggestionCount === 0 ? 0 : aiAcceptedCount / aiSuggestionCount,
@@ -331,7 +367,7 @@ function buildDashboardStats(): DashboardStats {
 }
 
 function getTicketDetail(id: number): TicketDetail {
-  const ticket = findTicket(id);
+  const ticket = applyTicketSlaSnapshot(findTicket(id));
   const user = users.find((item) => item.id === ticket.userId) ?? users[0];
   return {
     ticket,
@@ -434,9 +470,75 @@ function extractTicketId(message: string) {
   return match?.[1] ?? "当前";
 }
 
-function makeTicket(id: number, title: string, content: string, status: TicketStatus, priority: TicketPriority, category: string, userId: number, offsetMinutes: number): Ticket {
+function makeTicket(
+  id: number,
+  title: string,
+  content: string,
+  status: TicketStatus,
+  priority: TicketPriority,
+  category: string,
+  userId: number,
+  offsetMinutes: number,
+  assignedTo?: number | null,
+): Ticket {
   const timestamp = time(offsetMinutes);
-  return { id, title, content, status, priority, category, userId, createdAt: timestamp, updatedAt: timestamp };
+  const assignee = assignedTo ? users.find((user) => user.id === assignedTo) : null;
+  const ticket: Ticket = {
+    id,
+    title,
+    content,
+    status,
+    priority,
+    category,
+    userId,
+    assignedTo: assignedTo ?? null,
+    assignedUserName: assignee?.name ?? null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    closedAt: status === "CLOSED" ? time(Math.min(offsetMinutes + 40, 0)) : null,
+  };
+  ticket.responseDueAt = calculateResponseDueAt(priority, timestamp);
+  ticket.resolveDueAt = calculateResolveDueAt(priority, timestamp);
+  return applyTicketSlaSnapshot(ticket);
+}
+
+function applyTicketSlaSnapshot(ticket: Ticket): Ticket {
+  const status = calculateSlaStatus(ticket);
+  ticket.slaStatus = status;
+  ticket.slaOverdue = status === "OVERDUE";
+  if (!ticket.resolveDueAt || status === "NO_SLA") {
+    ticket.slaRemainingMinutes = null;
+  } else if (status === "COMPLETED") {
+    ticket.slaRemainingMinutes = 0;
+  } else {
+    ticket.slaRemainingMinutes = Math.floor((new Date(ticket.resolveDueAt).getTime() - Date.now()) / 60_000);
+  }
+  return ticket;
+}
+
+function calculateSlaStatus(ticket: Ticket): TicketSlaStatus {
+  if (ticket.status === "CLOSED") return "COMPLETED";
+  if (!ticket.resolveDueAt) return "NO_SLA";
+  const remainingMinutes = Math.floor((new Date(ticket.resolveDueAt).getTime() - Date.now()) / 60_000);
+  if (remainingMinutes < 0) return "OVERDUE";
+  if (remainingMinutes <= 240) return "AT_RISK";
+  return "ON_TRACK";
+}
+
+function calculateResponseDueAt(priority: TicketPriority, createdAt: string) {
+  const minutes =
+    priority === "URGENT" ? 30 : priority === "HIGH" ? 120 : priority === "LOW" ? 1440 : 480;
+  return addMinutes(createdAt, minutes);
+}
+
+function calculateResolveDueAt(priority: TicketPriority, createdAt: string) {
+  const minutes =
+    priority === "URGENT" ? 240 : priority === "HIGH" ? 1440 : priority === "LOW" ? 10_080 : 4320;
+  return addMinutes(createdAt, minutes);
+}
+
+function addMinutes(value: string, minutes: number) {
+  return new Date(new Date(value).getTime() + minutes * 60_000).toISOString();
 }
 
 function makeReply(id: number, ticketId: number, userId: number, content: string, replyType: "USER" | "STAFF" | "AI", offsetMinutes: number): TicketReply {

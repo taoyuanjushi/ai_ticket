@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.example.hello_demo.enums.SlaStatus;
 import jakarta.validation.constraints.NotBlank;
 
 import java.time.LocalDateTime;
@@ -36,11 +37,29 @@ public class Ticket {
     @TableField("user_id")
     private Long userId;
 
+    @TableField("response_due_at")
+    private LocalDateTime responseDueAt;
+
+    @TableField("resolve_due_at")
+    private LocalDateTime resolveDueAt;
+
+    @TableField("closed_at")
+    private LocalDateTime closedAt;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 
     @TableField("updated_at")
     private LocalDateTime updatedAt;
+
+    @TableField(exist = false)
+    private SlaStatus slaStatus;
+
+    @TableField(exist = false)
+    private Boolean slaOverdue;
+
+    @TableField(exist = false)
+    private Long slaRemainingMinutes;
 
     public Ticket() {
     }
@@ -122,6 +141,30 @@ public class Ticket {
         this.userId = userId;
     }
 
+    public LocalDateTime getResponseDueAt() {
+        return responseDueAt;
+    }
+
+    public void setResponseDueAt(LocalDateTime responseDueAt) {
+        this.responseDueAt = responseDueAt;
+    }
+
+    public LocalDateTime getResolveDueAt() {
+        return resolveDueAt;
+    }
+
+    public void setResolveDueAt(LocalDateTime resolveDueAt) {
+        this.resolveDueAt = resolveDueAt;
+    }
+
+    public LocalDateTime getClosedAt() {
+        return closedAt;
+    }
+
+    public void setClosedAt(LocalDateTime closedAt) {
+        this.closedAt = closedAt;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
@@ -136,5 +179,29 @@ public class Ticket {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public SlaStatus getSlaStatus() {
+        return slaStatus;
+    }
+
+    public void setSlaStatus(SlaStatus slaStatus) {
+        this.slaStatus = slaStatus;
+    }
+
+    public Boolean getSlaOverdue() {
+        return slaOverdue;
+    }
+
+    public void setSlaOverdue(Boolean slaOverdue) {
+        this.slaOverdue = slaOverdue;
+    }
+
+    public Long getSlaRemainingMinutes() {
+        return slaRemainingMinutes;
+    }
+
+    public void setSlaRemainingMinutes(Long slaRemainingMinutes) {
+        this.slaRemainingMinutes = slaRemainingMinutes;
     }
 }

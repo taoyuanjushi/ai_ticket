@@ -513,6 +513,60 @@ class AiPendingActionServiceTest {
         );
     }
 
+    @Test
+    void saveAiReplyPendingStoresEditedSuggestionAsReplyContent() {
+        when(ticketService.getTicketById(1L)).thenReturn(ticket(1L, "OPEN"));
+        when(aiPendingActionMapper.insert(any(AiPendingAction.class))).thenAnswer(invocation -> {
+            AiPendingAction action = invocation.getArgument(0);
+            action.setId(44L);
+            return 1;
+        });
+
+        AiReplyPendingRequest request = new AiReplyPendingRequest();
+        request.setConversationId("chat-edited-reply");
+        request.setSuggestion("STAFF edited final reply");
+        request.setOriginalSuggestion("Original AI suggestion");
+        request.setConfidence(0.82);
+        request.setReason("AI generated reason");
+        request.setRiskFlags(java.util.List.of("needs human review"));
+
+        AiPendingConfirmationResponse response = aiPendingActionService.createSaveAiReplyPending(1L, request);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) response.getData().get("payload");
+        assertEquals("STAFF edited final reply", payload.get("replyContent"));
+        assertEquals("STAFF edited final reply", payload.get("content"));
+        assertEquals("Original AI suggestion", payload.get("originalSuggestion"));
+        assertEquals(0.82, payload.get("confidence"));
+        assertEquals("AI generated reason", payload.get("reason"));
+        assertEquals(java.util.List.of("needs human review"), payload.get("riskFlags"));
+    }
+
+    @Test
+    void confirmSaveAiReplyUsesReplyContentBeforeLegacyContent() {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("ticketId", 1L);
+        payload.put("replyContent", "STAFF edited final reply");
+        payload.put("content", "Original AI suggestion");
+        payload.put("originalSuggestion", "Original AI suggestion");
+
+        when(aiPendingActionMapper.selectOne(any())).thenReturn(
+                pendingAction(45L, 7L, "chat-edited-confirm", AiPendingActionType.SAVE_AI_REPLY, payload)
+        );
+        when(aiPendingActionMapper.update(any(AiPendingAction.class), any())).thenReturn(1);
+        TicketReply reply = new TicketReply();
+        reply.setId(31L);
+        reply.setTicketId(1L);
+        reply.setContent("STAFF edited final reply");
+        when(ticketReplyService.createAiReply(eq(1L), any(AiReplyCreateDTO.class))).thenReturn(reply);
+
+        aiPendingActionService.confirmPendingAction("chat-edited-confirm");
+
+        ArgumentCaptor<AiReplyCreateDTO> captor = ArgumentCaptor.forClass(AiReplyCreateDTO.class);
+        verify(ticketReplyService).createAiReply(eq(1L), captor.capture());
+        assertEquals("STAFF edited final reply", captor.getValue().getContent());
+    }
+
     private AiPendingActionCreateRequest createRequest(
             String conversationId,
             AiPendingActionType actionType,

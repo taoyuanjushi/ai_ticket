@@ -8,9 +8,10 @@ public record DashboardStatsVO(
         Long closedCount,
         Long highPriorityCount,
         Long urgentPriorityCount,
+        Long slaAtRiskCount,
+        Long slaOverdueCount,
         Long aiSuggestionCount,
         Long aiAcceptedCount,
         Double aiAcceptanceRate
 ) {
 }
-
